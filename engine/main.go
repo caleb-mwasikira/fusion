@@ -27,7 +27,8 @@ var (
 func init() {
 	// Read banner file data
 	_, file, _, _ := runtime.Caller(0)
-	fpath := filepath.Join(filepath.Dir(file), "docs", filename)
+	projectDir := filepath.Dir(filepath.Dir(file))
+	fpath := filepath.Join(projectDir, "docs", filename)
 
 	var err error
 	data, err = os.ReadFile(fpath)

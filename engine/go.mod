@@ -1,4 +1,4 @@
-module github.com/caleb-mwasikira/fuse-fs
+module github.com/caleb-mwasikira/fusion/engine
 
 go 1.23.6
 
