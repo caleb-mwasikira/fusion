@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -18,16 +19,45 @@ var (
 	nodeIndex uint64 = 0
 	ownerUid  uint32 = uint32(os.Getuid())
 	ownerGid  uint32 = uint32(os.Getegid())
+
+	filename string = "RAM-Based File System.md"
+	data     []byte
 )
+
+func init() {
+	// Read banner file data
+	_, file, _, _ := runtime.Caller(0)
+	fpath := filepath.Join(filepath.Dir(file), "docs", filename)
+
+	var err error
+	data, err = os.ReadFile(fpath)
+	if err != nil {
+		log.Fatalf("Error reading default file; %v", err)
+	}
+}
 
 type FS struct{}
 
 func (FS) Root() (fs.Node, error) {
-	dir, errno := NewNode("/", os.ModeDir|0o755)
+	rootNode, errno := NewNode("/", os.ModeDir|0o755)
 	if errno != 0 {
-		return nil, syscall.EINVAL
+		return nil, errno
 	}
-	return dir, nil
+
+	// Create README.md file at root node
+	node, errno := NewNode(filename, 0o777)
+	if errno != 0 {
+		return nil, errno
+	}
+
+	node.data = data
+	node.attr.Size = uint64(len(data))
+	node.attr.Mtime = time.Now()
+
+	rootNode.children[filename] = node
+	log.Printf("Created default file '%v' on root node\n", filename)
+
+	return rootNode, nil
 }
 
 type Node struct {
@@ -92,15 +122,6 @@ func (n *Node) Lookup(ctx context.Context, name string) (fs.Node, error) {
 func (n *Node) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	// log.Printf("ReadDirAll in %v\n", n.name)
 	dirEntries := []fuse.Dirent{}
-
-	isRootDir := n.attr.Inode == 1
-	if isRootDir {
-		dirEntries = append(dirEntries, fuse.Dirent{
-			Inode: 2,
-			Name:  "hello.txt",
-			Type:  fuse.DT_File,
-		})
-	}
 
 	for _, child := range n.children {
 		dirEntries = append(dirEntries, fuse.Dirent{
@@ -204,16 +225,16 @@ func (n *Node) Rename(ctx context.Context, req *fuse.RenameRequest, newDir fs.No
 func main() {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("error getting user's home dir; %v\n", err)
+		log.Fatalf("Error getting user's home dir; %v\n", err)
 	}
 
 	fileSystem := "MEMORY_FS"
 	mountPoint := filepath.Join(homeDir, fileSystem)
 
-	log.Printf("mounting filesystem %v onto %v\n", fileSystem, mountPoint)
+	log.Printf("Mounting filesystem %v onto %v\n", fileSystem, mountPoint)
 	conn, err := fuse.Mount(mountPoint, fuse.FSName(fileSystem))
 	if err != nil {
-		log.Fatalf("error mounting filesystem; %v\n", err)
+		log.Fatalf("Error mounting filesystem; %v\n", err)
 	}
 	defer conn.Close()
 
@@ -236,7 +257,7 @@ func main() {
 
 	err = fs.Serve(conn, FS{})
 	if err != nil {
-		log.Fatalf("error starting FUSE server; %v\n", err)
+		log.Fatalf("Error starting FUSE server; %v\n", err)
 	}
 
 }
