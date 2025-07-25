@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"path/filepath"
 	"syscall"
 
+	"github.com/caleb-mwasikira/fusion/utils"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
@@ -22,7 +22,6 @@ type Node struct {
 var _ = (fs.NodeOnAdder)((*Node)(nil))
 var _ = (fs.NodeStatfser)((*Node)(nil))
 var _ = (fs.NodeLookuper)((*Node)(nil))
-var _ = (fs.NodeMknoder)((*Node)(nil))
 var _ = (fs.NodeMkdirer)((*Node)(nil))
 var _ = (fs.NodeRmdirer)((*Node)(nil))
 var _ = (fs.NodeUnlinker)((*Node)(nil))
@@ -84,40 +83,11 @@ func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Lookup %v\n", path)
+
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(path, &stat)
 	if err != nil {
 		// log.Printf("Lookup %v failed; %v\n", path, err)
-		return nil, fs.ToErrno(err)
-	}
-	out.Attr.FromStat(&stat)
-
-	child := n.NewPersistentInode(
-		ctx,
-		&Node{path: path},
-		fs.StableAttr{
-			Ino:  stat.Ino,
-			Mode: stat.Mode,
-		},
-	)
-	n.AddChild(name, child, false)
-	return child, 0
-}
-
-func (n *Node) Mknod(ctx context.Context, name string, mode, rdev uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	path := filepath.Join(n.path, name)
-	// log.Printf("Mknod %v\n", path)
-	err := syscall.Mknod(path, mode, int(rdev))
-	if err != nil {
-		// log.Printf("Mknod %v failed; %v\n", path, err)
-		return nil, fs.ToErrno(err)
-	}
-
-	stat := syscall.Stat_t{}
-	err = syscall.Lstat(path, &stat)
-	if err != nil {
-		syscall.Rmdir(path)
-		// log.Printf("Mknod %v failed; %v\n", path, err)
 		return nil, fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -368,7 +338,7 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 }
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	log.Printf("OpendirHandle %v\n", n.path)
+	// log.Printf("OpendirHandle %v\n", n.path)
 
 	ds, errno := fs.NewLoopbackDirStream(n.path)
 	if errno != 0 {
@@ -380,37 +350,20 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, 
 
 func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// log.Printf("Readdir %v\n", n.path)
-	files, err := os.ReadDir(n.path)
+	entries, err := utils.ReadLocalDir(n.path)
 	if err != nil {
-		// log.Printf("Readdir %v failed; %v\n", n.path, err)
 		return nil, fs.ToErrno(err)
-	}
-
-	entries := make([]fuse.DirEntry, 0, len(files))
-	for _, file := range files {
-		path := filepath.Join(n.path, file.Name())
-
-		var stat syscall.Stat_t
-		err = syscall.Lstat(path, &stat)
-		if err != nil {
-			continue // skip invalid entries instead of failing
-		}
-
-		entries = append(entries, fuse.DirEntry{
-			Ino:  stat.Ino,
-			Mode: stat.Mode,
-			Name: file.Name(),
-		})
 	}
 	return fs.NewListDirStream(entries), fs.OK
 }
 
 func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// log.Printf("Getattr %v\n", n.path)
+
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(n.path, &stat)
 	if err != nil {
-		// log.Printf("Lookup %v failed; %v\n", path, err)
+		// log.Printf("Getattr %v failed; %v\n", n.path, err)
 		return fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -420,26 +373,26 @@ func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	path := n.path
 	// log.Printf("Setattr %v\n", n.path)
-	m, ok := in.GetMode()
+	mode, ok := in.GetMode()
 	if ok {
-		err := syscall.Chmod(path, m)
+		err := syscall.Chmod(path, mode)
 		if err != nil {
 			// log.Printf("Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
 
-	userID, userIDOK := in.GetUID()
-	groupID, groupIDOK := in.GetGID()
-	if userIDOK || groupIDOK {
+	userId, uidOK := in.GetUID()
+	groupId, gidOK := in.GetGID()
+	if uidOK || gidOK {
 		suid := -1
 		sgid := -1
 
-		if userIDOK {
-			suid = int(userID)
+		if uidOK {
+			suid = int(userId)
 		}
-		if groupIDOK {
-			sgid = int(groupID)
+		if gidOK {
+			sgid = int(groupId)
 		}
 
 		err := syscall.Chown(path, suid, sgid)
@@ -506,18 +459,18 @@ func (n *Node) OnForget() {
 	n.ForgetPersistent()
 }
 
-// NewLoopbackRoot returns a root node for a loopback file system whose
-// root is at the given root. This node implements all NodeXxxxer
-// operations available.
-func NewLoopbackRoot(rootpath string) (fs.InodeEmbedder, error) {
+// NewLoopbackRoot returns a root node for a loopback file system.
+// This node implements all NodeXxxxer operations available.
+func NewLoopbackRoot(realpath string) (fs.InodeEmbedder, error) {
+	// Confirm path exists
 	var stat syscall.Stat_t
-	err := syscall.Stat(rootpath, &stat)
+	err := syscall.Stat(realpath, &stat)
 	if err != nil {
 		return nil, err
 	}
 
 	rootNode := &Node{
-		path: rootpath,
+		path: realpath,
 	}
 	return rootNode, nil
 }

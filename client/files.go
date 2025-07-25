@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"syscall"
 
+	"github.com/caleb-mwasikira/fusion/proto"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"golang.org/x/sys/unix"
 )
 
 type FileHandle struct {
@@ -28,17 +32,15 @@ var _ = (fs.FileFsyncer)((*FileHandle)(nil))
 var _ = (fs.FileSetattrer)((*FileHandle)(nil))
 
 func (fh *FileHandle) Read(ctx context.Context, buf []byte, off int64) (res fuse.ReadResult, errno syscall.Errno) {
-	fd := fh.file.Fd()
-	n, err := syscall.Pread(int(fd), buf, off)
-	if err != nil {
+	n, err := fh.file.ReadAt(buf, off)
+	if err != nil && err != io.EOF {
 		return nil, fs.ToErrno(err)
 	}
-	return fuse.ReadResultFd(uintptr(fd), off, n), fs.OK
+	return fuse.ReadResultData(buf[:n]), fs.OK
 }
 
 func (fh *FileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
-	fd := fh.file.Fd()
-	n, err := syscall.Pwrite(int(fd), data, off)
+	n, err := fh.file.WriteAt(data, off)
 	return uint32(n), fs.ToErrno(err)
 }
 
@@ -181,6 +183,71 @@ func (fh *FileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Er
 
 func (fh *FileHandle) Lseek(ctx context.Context, off uint64, whence uint32) (uint64, syscall.Errno) {
 	fd := fh.file.Fd()
-	n, err := unix.Seek(int(fd), int64(off), int(whence))
+	n, err := syscall.Seek(int(fd), int64(off), int(whence))
 	return uint64(n), fs.ToErrno(err)
+}
+
+func downloadRemoteFile(ctx context.Context, remote *proto.Dirent) error {
+	path := filepath.Join(rootDir, remote.Path)
+	// log.Printf("Downloading remote file %v\n", path)
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(remote.Mode))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Remote is a file;
+	// We need to check for any file changes on remote and
+	// download them
+	hash := md5.New()
+	_, err = io.Copy(hash, file)
+	if err != nil {
+		return err
+	}
+	localFileHash := fmt.Sprintf("%x", md5.Sum(nil))
+
+	// Download file
+	stream, err := grpcClient.DownloadFile(
+		ctx,
+		&proto.DownloadRequest{
+			Path:         remote.Path,
+			ExpectedHash: localFileHash,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	totalExpectedSize := -1
+	recvBytes := 0
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if totalExpectedSize == -1 {
+			totalExpectedSize = int(chunk.TotalSize)
+		}
+
+		n, err := file.WriteAt(chunk.Data, chunk.Offset)
+		if err != nil {
+			return err
+		}
+		recvBytes += n
+	}
+
+	if totalExpectedSize == -1 || recvBytes == 0 {
+		// No file received and no error means we have the same
+		// local file as remote
+		return nil
+	}
+
+	if totalExpectedSize != -1 && recvBytes != totalExpectedSize {
+		return fmt.Errorf("expected file of size %v but got %v bytes instead", totalExpectedSize, recvBytes)
+	}
+	return nil
 }

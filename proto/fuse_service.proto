@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "./pb";
+option go_package = "./proto";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
@@ -25,34 +25,26 @@ message FileAttr {
 }
 
 message Node {
-    string name = 1;
+    string path = 1;
     FileAttr attr = 2;
-}
-
-message Dirent {
-    uint64 inode = 1;       // inode number
-    uint32 dirent_type = 2; // type of the entry, eg DT_FILE
-    string name = 3;        // name of the entry
 }
 
 message LookupRequest {
     Node node = 1;          // node to perform lookup operation in
-    string name = 2;        // name of node to look for
+    string path = 2;        // path of node to look for
 }
 
 message MkdirRequest {
-    Node parent_node = 1;
-    string name = 2;        // name of new directory to be created
-    uint32 mode = 3;        // file mode
-    uint32 umask = 4;       // umask of new directory
+    string path = 1;        // path of new directory to be created
+    uint32 mode = 2;        // file mode
+    uint32 umask = 3;       // umask of new directory
 }
 
 message CreateRequest {
-    Node parent_node = 1;   // parent node where file or folder is to be created
-    string name = 2;
-    uint32 flags = 3;
-    uint32 mode = 4;
-    uint32 umask = 5;
+    string path = 1;
+    uint32 flags = 2;
+    uint32 mode = 3;
+    uint32 umask = 4;
 }
 
 message CreateResponse {
@@ -62,29 +54,24 @@ message CreateResponse {
     FileAttr attr = 4;
 }
 
-message Header {
-    uint64 id = 1;          // unique id for request
-    uint64 node_id = 2;     // file or directory the request is about
-    Owner owner = 3;        // user ID and group ID of process making request
-}
-
 message WriteRequest {
     Node parent_node = 1;   // file to write to
-    Header request_header = 2;
-    int64 offset = 3;       // point to start writing within file
-    bytes data = 4;
-    uint32 write_flags = 5;
-    uint64 lock_owner = 6;  // identify the owner of a particular lock
-    uint32 file_flags = 7;  // example; os.O_WRONLY
+    int64 offset = 2;       // point to start writing within file
+    bytes data = 3;
+    uint32 write_flags = 4;
+    uint64 lock_owner = 5;  // identify the owner of a particular lock
+    uint32 file_flags = 6;  // example; os.O_WRONLY
 }
 
 message RenameRequest {
-    Node old_node = 1;
-    Node new_node = 2;
-    Header header = 3;
-    uint64 new_dir = 4;
-    string old_name = 5;
-    string new_name = 6;
+    string old_path = 1;
+    string new_path = 2;
+}
+
+message Dirent {
+    uint64 inode = 1;       // inode number
+    uint32 mode = 2; 
+    string path = 3;        // path of the entry
 }
 
 message ReadDirAllResponse {
@@ -99,15 +86,38 @@ message WriteResponse {
     uint64 bytes_written = 1;
 }
 
+message LinkRequest {
+    string old_path = 1;
+    string new_path = 2;
+}
+
+message LinkResponse {
+    Node node = 1;
+}
+
+message DownloadRequest {
+    string path = 1;
+    string expected_hash = 2;
+}
+
+message FileChunk {
+    bytes data = 1;
+    int64 offset = 2;
+    int64 total_size = 3;
+}
+
 service FuseService {
-    rpc Attr(Node) returns (FileAttr) {};
     rpc Lookup(LookupRequest) returns (Node) {};
     rpc ReadDirAll(Node) returns (ReadDirAllResponse) {};
     rpc Mkdir(MkdirRequest) returns (Node) {};
+    rpc Rmdir(Node) returns (google.protobuf.Empty) {};
     rpc Getattr(Node) returns (FileAttr) {};
-    rpc Fsync(Node) returns (google.protobuf.Empty) {};
     rpc Create(CreateRequest) returns (CreateResponse) {};
+    rpc Symlink(LinkRequest) returns (LinkResponse) {};
+    rpc Link(LinkRequest) returns (LinkResponse) {};
     rpc ReadAll(Node) returns (ReadAllResponse) {};
     rpc Write(WriteRequest) returns (WriteResponse) {};
     rpc Rename(RenameRequest) returns (google.protobuf.Empty) {};
+
+    rpc DownloadFile(DownloadRequest) returns (stream FileChunk) {};
 }

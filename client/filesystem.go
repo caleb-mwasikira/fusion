@@ -5,11 +5,18 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 
+	"github.com/caleb-mwasikira/fusion/proto"
+	"github.com/caleb-mwasikira/fusion/utils"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"golang.org/x/sys/unix"
+)
+
+var (
+	rootDir string
 )
 
 // Node is a filesystem node in a loopback file system.
@@ -20,9 +27,7 @@ type Node struct {
 }
 
 var _ = (fs.NodeOnAdder)((*Node)(nil))
-var _ = (fs.NodeStatfser)((*Node)(nil))
 var _ = (fs.NodeLookuper)((*Node)(nil))
-var _ = (fs.NodeMknoder)((*Node)(nil))
 var _ = (fs.NodeMkdirer)((*Node)(nil))
 var _ = (fs.NodeRmdirer)((*Node)(nil))
 var _ = (fs.NodeUnlinker)((*Node)(nil))
@@ -38,35 +43,44 @@ var _ = (fs.NodeGetattrer)((*Node)(nil))
 var _ = (fs.NodeSetattrer)((*Node)(nil))
 var _ = (fs.NodeOnForgetter)((*Node)(nil))
 
+func (n *Node) relativePath(path string) string {
+	return strings.TrimPrefix(path, rootDir)
+}
+
 func (n *Node) OnAdd(ctx context.Context) {
 	if !n.IsDir() {
 		return
 	}
 
-	files, err := os.ReadDir(n.path)
+	// log.Printf("OnAdd %v\n", n.path)
+
+	relativePath := n.relativePath(n.path)
+	response, err := grpcClient.ReadDirAll(ctx, &proto.Node{Path: relativePath})
 	if err != nil {
 		return
 	}
 
-	for _, file := range files {
-		path := filepath.Join(n.path, file.Name())
+	// Download directory tree and re-create it
+	wg := sync.WaitGroup{}
+	entries := response.GetEntries()
 
-		stat := syscall.Stat_t{}
-		err = syscall.Lstat(path, &stat)
-		if err != nil {
-			continue
-		}
+	for _, entry := range entries {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup, entry *proto.Dirent) {
+			defer wg.Done()
 
-		child := n.NewPersistentInode(
-			ctx,
-			&Node{path: path},
-			fs.StableAttr{
-				Ino:  stat.Ino,
-				Mode: stat.Mode,
-			},
-		)
-		n.AddChild(file.Name(), child, false)
+			path := filepath.Join(rootDir, entry.Path)
+			mode := os.FileMode(entry.Mode)
+
+			if mode.IsDir() {
+				err = os.MkdirAll(path, mode)
+			} else {
+				err = downloadRemoteFile(ctx, entry)
+			}
+		}(&wg, entry)
 	}
+
+	wg.Wait()
 }
 
 func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
@@ -84,6 +98,7 @@ func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Lookup %v\n", path)
+
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(path, &stat)
 	if err != nil {
@@ -104,39 +119,11 @@ func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 	return child, 0
 }
 
-func (n *Node) Mknod(ctx context.Context, name string, mode, rdev uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	path := filepath.Join(n.path, name)
-	// log.Printf("Mknod %v\n", path)
-	err := syscall.Mknod(path, mode, int(rdev))
-	if err != nil {
-		// log.Printf("Mknod %v failed; %v\n", path, err)
-		return nil, fs.ToErrno(err)
-	}
-
-	stat := syscall.Stat_t{}
-	err = syscall.Lstat(path, &stat)
-	if err != nil {
-		syscall.Rmdir(path)
-		// log.Printf("Mknod %v failed; %v\n", path, err)
-		return nil, fs.ToErrno(err)
-	}
-	out.Attr.FromStat(&stat)
-
-	child := n.NewPersistentInode(
-		ctx,
-		&Node{path: path},
-		fs.StableAttr{
-			Ino:  stat.Ino,
-			Mode: stat.Mode,
-		},
-	)
-	n.AddChild(name, child, false)
-	return child, 0
-}
-
 func (n *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Mkdir; %v\n", path)
+
+	// Create local directory
 	err := os.Mkdir(path, os.FileMode(mode))
 	if err != nil {
 		// log.Printf("Mkdir %v failed; %v\n", path, err)
@@ -161,20 +148,69 @@ func (n *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.En
 		},
 	)
 	n.AddChild(name, child, false)
+
+	// Create remote directory
+	path = n.relativePath(path)
+
+	go func(path string, mode uint32) {
+		_, err := grpcClient.Mkdir(context.TODO(), &proto.MkdirRequest{
+			Path: path,
+			Mode: mode,
+		})
+		if err != nil {
+			log.Printf("[ERROR] creating remote directory; %v\n", err)
+		}
+	}(path, stat.Mode)
+
 	return child, 0
 }
 
 func (n *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Rmdir %v\n", path)
+
 	err := syscall.Rmdir(path)
-	return fs.ToErrno(err)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	// Remove remote directory
+	path = n.relativePath(path)
+
+	go func(path string) {
+		_, err := grpcClient.Rmdir(context.TODO(), &proto.Node{
+			Path: path,
+		})
+		if err != nil {
+			log.Printf("[ERROR] deleting remote directory; %v\n", err)
+		}
+	}(path)
+
+	return fs.OK
 }
 
 func (n *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Unlink %v\n", path)
-	err := syscall.Unlink(path)
+
+	// Remove local file
+	err := os.Remove(path)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	// Remove remote file
+	path = n.relativePath(path)
+
+	go func(path string) {
+		_, err := grpcClient.Rmdir(context.TODO(), &proto.Node{
+			Path: path,
+		})
+		if err != nil {
+			log.Printf("[ERROR] deleting remote file; %v\n", err)
+		}
+	}(path)
+
 	return fs.ToErrno(err)
 }
 
@@ -188,6 +224,7 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 	oldpath := filepath.Join(n.path, oldName)
 	newpath := filepath.Join(newNode.path, newName)
 	// log.Printf("Rename %v -> %v\n", oldpath, newpath)
+
 	err := os.Rename(oldpath, newpath)
 	if err != nil {
 		// log.Printf("Rename %v -> %v failed; %v\n", oldpath, newpath, err)
@@ -223,13 +260,28 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 	)
 	newNode.AddChild(newName, child, false)
 
+	// Rename remote file
+	oldpath = n.relativePath(oldpath)
+	newpath = n.relativePath(newpath)
+
+	go func(oldpath, newpath string) {
+		_, err := grpcClient.Rename(context.TODO(), &proto.RenameRequest{
+			OldPath: oldpath,
+			NewPath: newpath,
+		})
+		if err != nil {
+			log.Printf("[ERROR] renaming remote file; %v\n", err)
+		}
+	}(oldpath, newpath)
+
 	return 0
 }
 
 func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	path := filepath.Join(n.path, name)
 	// log.Printf("Create %v\n", path)
-	file, err := os.OpenFile(path, int(flags), 0755)
+
+	file, err := os.OpenFile(path, int(flags), os.FileMode(mode))
 	if err != nil {
 		// log.Printf("Create %v failed; %v\n", path, err)
 		return nil, nil, 0, fs.ToErrno(err)
@@ -252,6 +304,18 @@ func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint3
 		},
 	)
 	n.AddChild(name, child, false)
+
+	// Create remote file
+	path = n.relativePath(path)
+
+	go func(path string, flags uint32, mode uint32) {
+		grpcClient.Create(context.TODO(), &proto.CreateRequest{
+			Path:  path,
+			Flags: flags,
+			Mode:  mode,
+		})
+	}(path, flags, mode)
+
 	return child, &FileHandle{file: file}, 0, 0
 }
 
@@ -368,7 +432,7 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 }
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	log.Printf("OpendirHandle %v\n", n.path)
+	// log.Printf("OpendirHandle %v\n", n.path)
 
 	ds, errno := fs.NewLoopbackDirStream(n.path)
 	if errno != 0 {
@@ -380,37 +444,20 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, 
 
 func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// log.Printf("Readdir %v\n", n.path)
-	files, err := os.ReadDir(n.path)
+	entries, err := utils.ReadLocalDir(n.path)
 	if err != nil {
-		// log.Printf("Readdir %v failed; %v\n", n.path, err)
 		return nil, fs.ToErrno(err)
-	}
-
-	entries := make([]fuse.DirEntry, 0, len(files))
-	for _, file := range files {
-		path := filepath.Join(n.path, file.Name())
-
-		var stat syscall.Stat_t
-		err = syscall.Lstat(path, &stat)
-		if err != nil {
-			continue // skip invalid entries instead of failing
-		}
-
-		entries = append(entries, fuse.DirEntry{
-			Ino:  stat.Ino,
-			Mode: stat.Mode,
-			Name: file.Name(),
-		})
 	}
 	return fs.NewListDirStream(entries), fs.OK
 }
 
 func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// log.Printf("Getattr %v\n", n.path)
+
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(n.path, &stat)
 	if err != nil {
-		// log.Printf("Lookup %v failed; %v\n", path, err)
+		// log.Printf("Getattr %v failed; %v\n", n.path, err)
 		return fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -420,26 +467,26 @@ func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	path := n.path
 	// log.Printf("Setattr %v\n", n.path)
-	m, ok := in.GetMode()
+	mode, ok := in.GetMode()
 	if ok {
-		err := syscall.Chmod(path, m)
+		err := syscall.Chmod(path, mode)
 		if err != nil {
 			// log.Printf("Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
 
-	userID, userIDOK := in.GetUID()
-	groupID, groupIDOK := in.GetGID()
-	if userIDOK || groupIDOK {
+	userId, uidOK := in.GetUID()
+	groupId, gidOK := in.GetGID()
+	if uidOK || gidOK {
 		suid := -1
 		sgid := -1
 
-		if userIDOK {
-			suid = int(userID)
+		if uidOK {
+			suid = int(userId)
 		}
-		if groupIDOK {
-			sgid = int(groupID)
+		if gidOK {
+			sgid = int(groupId)
 		}
 
 		err := syscall.Chown(path, suid, sgid)
@@ -449,39 +496,14 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 		}
 	}
 
-	modifiedTime, modifiedOK := in.GetMTime()
-	accessTime, accessOK := in.GetATime()
+	// TODO: Implement setting modified and access times
 
-	if modifiedOK || accessOK {
-		accessTimestamp := unix.Timespec{}
-		modifiedTimestamp := unix.Timespec{}
+	// modifiedTime, modifiedOK := in.GetMTime()
+	// accessTime, accessOK := in.GetATime()
 
-		var err error
-		if accessOK {
-			accessTimestamp, err = unix.TimeToTimespec(accessTime)
-			if err != nil {
-				// log.Printf("Setattr %v failed; %v\n", n.path, err)
-				return fs.ToErrno(err)
-			}
-		}
-		if modifiedOK {
-			modifiedTimestamp, err = unix.TimeToTimespec(modifiedTime)
-			if err != nil {
-				// log.Printf("Setattr %v failed; %v\n", n.path, err)
-				return fs.ToErrno(err)
-			}
-		}
+	// if modifiedOK || accessOK {
 
-		timestamp := []unix.Timespec{
-			accessTimestamp,
-			modifiedTimestamp,
-		}
-		err = unix.UtimesNanoAt(unix.AT_FDCWD, path, timestamp, unix.AT_SYMLINK_NOFOLLOW)
-		if err != nil {
-			// log.Printf("Setattr %v failed; %v\n", n.path, err)
-			return fs.ToErrno(err)
-		}
-	}
+	// }
 
 	size, ok := in.GetSize()
 	if ok {
@@ -506,18 +528,19 @@ func (n *Node) OnForget() {
 	n.ForgetPersistent()
 }
 
-// NewLoopbackRoot returns a root node for a loopback file system whose
-// root is at the given root. This node implements all NodeXxxxer
-// operations available.
-func NewLoopbackRoot(rootpath string) (fs.InodeEmbedder, error) {
+// NewLoopbackRoot returns a root node for a loopback file system.
+// This node implements all NodeXxxxer operations available.
+func NewLoopbackRoot(realpath string) (fs.InodeEmbedder, error) {
+	// Confirm path exists
 	var stat syscall.Stat_t
-	err := syscall.Stat(rootpath, &stat)
+	err := syscall.Stat(realpath, &stat)
 	if err != nil {
 		return nil, err
 	}
 
+	rootDir = realpath
 	rootNode := &Node{
-		path: rootpath,
+		path: realpath,
 	}
 	return rootNode, nil
 }

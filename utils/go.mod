@@ -1,4 +1,4 @@
-module github.com/caleb-mwasikira/fusion/shared
+module github.com/caleb-mwasikira/fusion/utils
 
 go 1.23.6
 

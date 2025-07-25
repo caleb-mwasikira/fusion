@@ -7,7 +7,6 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"golang.org/x/sys/unix"
 )
 
 type FileHandle struct {
@@ -181,6 +180,6 @@ func (fh *FileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Er
 
 func (fh *FileHandle) Lseek(ctx context.Context, off uint64, whence uint32) (uint64, syscall.Errno) {
 	fd := fh.file.Fd()
-	n, err := unix.Seek(int(fd), int64(off), int(whence))
+	n, err := syscall.Seek(int(fd), int64(off), int(whence))
 	return uint64(n), fs.ToErrno(err)
 }
