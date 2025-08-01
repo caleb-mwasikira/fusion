@@ -222,7 +222,12 @@ func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint3
 		},
 	)
 	n.AddChild(name, child, false)
-	return child, &FileHandle{file: file}, 0, 0
+
+	fd, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, nil, 0, fs.ToErrno(err)
+	}
+	return child, NewLoopbackFile(fd), 0, 0
 }
 
 func (n *Node) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -334,7 +339,13 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 		},
 	)
 	n.AddChild(name, child, false)
-	return &FileHandle{file: file}, 0, 0
+
+	fd, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, 0, fs.ToErrno(err)
+	}
+
+	return NewLoopbackFile(fd), 0, 0
 }
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
