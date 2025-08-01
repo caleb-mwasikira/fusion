@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -13,6 +15,17 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var (
+	CertDir string
+)
+
+func init() {
+	_, file, _, _ := runtime.Caller(0)
+	utilsDir := filepath.Dir(file)
+	projectDir := filepath.Dir(utilsDir)
+	CertDir = filepath.Join(projectDir, "certs")
+}
 
 func ReadLocalDir(path string) ([]fuse.DirEntry, error) {
 	entries := []fuse.DirEntry{}

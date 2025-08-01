@@ -15,7 +15,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
@@ -87,9 +87,16 @@ func start_FUSE_FileSystem(errorChan chan<- error) {
 
 func start_GRPC_Client() {
 	log.Println("Creating GRPC client")
+
+	certFile := filepath.Join(utils.CertDir, "ca_cert.pem")
+	creds, err := credentials.NewClientTLSFromFile(certFile, "")
+	if err != nil {
+		log.Fatalf("Error generating gRPC client credentials; %v\n", err)
+	}
+
 	conn, err := grpc.NewClient(
 		remoteAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 	)
 	if err != nil {
 		log.Fatalf("Error creating GRPC channel; %v\n", err)

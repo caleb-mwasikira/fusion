@@ -16,6 +16,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var (
@@ -95,7 +96,15 @@ func start_GRPC_FUSE_Service(errorChan chan<- error) {
 		return
 	}
 
-	grpcServer = grpc.NewServer()
+	certFile := filepath.Join(utils.CertDir, "server_cert.pem")
+	keyFile := filepath.Join(utils.CertDir, "server_key.pem")
+	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+	if err != nil {
+		errorChan <- err
+		return
+	}
+
+	grpcServer = grpc.NewServer(grpc.Creds(creds))
 	proto.RegisterFuseServiceServer(grpcServer, GrpcFuseService{
 		path: mountPoint,
 	})
