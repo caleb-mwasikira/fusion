@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/proto"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -25,16 +26,14 @@ type key string
 
 var (
 	debug                bool
-	realPath, mountPoint string
+	realpath, mountpoint string
 	port                 uint
 
+	SECRET_KEY string
 	fuseServer *fuse.Server
 	grpcServer *grpc.Server
 	userCtxKey key = "user"
 )
-
-//go:embed secret.txt
-var SECRET_KEY string
 
 func init() {
 	var help bool
@@ -44,8 +43,8 @@ func init() {
 	}
 
 	flag.BoolVar(&debug, "debug", false, "Display FUSE debug logs to stdout.")
-	flag.StringVar(&realPath, "realpath", "", "Physical directory where files are stored")
-	flag.StringVar(&mountPoint, "mountpoint", filepath.Join(homeDir, "FAT_BOY"), "Virtual directory where files appear")
+	flag.StringVar(&realpath, "realpath", "", "Physical directory where files are stored")
+	flag.StringVar(&mountpoint, "mountpoint", filepath.Join(homeDir, "FAT_BOY"), "Virtual directory where files appear")
 	flag.UintVar(&port, "port", 1054, "Port to run the GRPC FUSE service on.")
 	flag.BoolVar(&help, "help", false, "Display help message.")
 	flag.Parse()
@@ -55,17 +54,14 @@ func init() {
 		os.Exit(0)
 	}
 
-	// Ensure realPath directory exists
-	if !dirExists(realPath) {
-		log.Fatalln("-realpath directory does not exist")
-	}
-
-	// Ensure destination directory exists
-	if !dirExists(mountPoint) {
-		log.Fatalln("-mountpoint directory does not exist")
+	err = lib.LoadEnv()
+	if err != nil {
+		log.Fatalf("Error loading env variables; %v\n", err)
 	}
 
 	// Ensure SECRET_KEY is always set
+	SECRET_KEY = os.Getenv("SECRET_KEY")
+
 	if strings.TrimSpace(SECRET_KEY) == "" {
 		log.Fatalln("Missing SECRET_KEY env variable")
 	}
@@ -80,16 +76,26 @@ func dirExists(path string) bool {
 }
 
 func mountFileSystem(errorChan chan<- error) {
-	log.Printf("Mounting directory %v -> %v\n", realPath, mountPoint)
+	log.Printf("Mounting directory %v -> %v\n", realpath, mountpoint)
 
-	loopbackRoot, err := NewLoopbackRoot(realPath)
+	// Ensure realpath directory exists
+	if !dirExists(realpath) {
+		log.Fatalln("-realpath directory does not exist")
+	}
+
+	// Ensure mountpoint directory exists
+	if !dirExists(mountpoint) {
+		log.Fatalln("-mountpoint directory does not exist")
+	}
+
+	loopbackRoot, err := NewLoopbackRoot(realpath)
 	if err != nil {
 		errorChan <- fmt.Errorf("error creating loopback Root directory; %v", err)
 		return
 	}
 
 	fuseServer, err = fs.Mount(
-		mountPoint,
+		mountpoint,
 		loopbackRoot,
 		&fs.Options{
 			MountOptions: fuse.MountOptions{
@@ -152,7 +158,7 @@ func start_gRPCServer(errorChan chan<- error) {
 	proto.RegisterFuseServer(
 		grpcServer,
 		FuseServer{
-			path: mountPoint,
+			path: mountpoint,
 		},
 	)
 	err = grpcServer.Serve(listener)

@@ -2,9 +2,11 @@ package lib
 
 import (
 	_ "embed"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,6 +32,35 @@ func init() {
 	if err != nil {
 		log.Fatalf("Error creating project directory; %v\n", err)
 	}
+}
+
+func LoadEnv() error {
+	envFile := filepath.Join(ProjectDir, ".env")
+
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		fields := strings.SplitN(line, "=", 2)
+		if len(fields) != 2 {
+			return fmt.Errorf("invalid .env file format near; %v", line)
+		}
+
+		key := strings.Trim(fields[0], "\"")
+		value := strings.Trim(fields[1], "\"")
+		err = os.Setenv(key, value)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func FileInfoToFileAttr(info os.FileInfo) *proto.FileAttr {
