@@ -9,12 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"slices"
 	"strings"
 	"time"
 
-	db "github.com/caleb-mwasikira/fusion/database"
+	"github.com/caleb-mwasikira/fusion/server/db"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,18 +22,10 @@ import (
 )
 
 var (
-	secretKey string
 	userModel *db.UserModel = db.NewUserModel()
 
 	nonProtectedMethods []string = []string{"Auth", "CreateOrg", "CreateUser"}
 )
-
-func init() {
-	secretKey = os.Getenv("SECRET_KEY")
-	if strings.TrimSpace(secretKey) == "" {
-		log.Fatalln("Missing SECRET_KEY env variable")
-	}
-}
 
 // Each gRPC request (except some non-protected methods) is going to embed a
 // json web token in the request metadata for authentication.
@@ -150,7 +141,7 @@ func generateToken(user db.User) (string, error) {
 			"sub": b64EncodedData,
 		},
 	)
-	tokenString, err := token.SignedString([]byte(secretKey))
+	tokenString, err := token.SignedString([]byte(SECRET_KEY))
 	return tokenString, err
 }
 
@@ -163,11 +154,11 @@ func validToken(tokenString string, obj any) bool {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
-			return []byte(secretKey), nil
+			return []byte(SECRET_KEY), nil
 		},
 	)
 	if err != nil {
-		log.Printf("[ERROR] parsing jwt; %v\n", err)
+		log.Printf("Error parsing jwt; %v\n", err)
 		return false
 	}
 
@@ -184,7 +175,7 @@ func validToken(tokenString string, obj any) bool {
 		// decode data
 		data, err := base64.StdEncoding.DecodeString(b64EncodedData)
 		if err != nil {
-			log.Printf("[ERROR] decoding \"sub\" value of jwt; %v\n", err)
+			log.Printf("Error decoding \"sub\" value of jwt; %v\n", err)
 			return false
 		}
 
@@ -197,13 +188,13 @@ func validToken(tokenString string, obj any) bool {
 }
 
 // func hashUserPassword(password string) string {
-// 	hash := hmac.New(sha256.New, []byte(secretKey))
+// 	hash := hmac.New(sha256.New, []byte(SECRET_KEY))
 // 	digest := hash.Sum([]byte(password))
 // 	return fmt.Sprintf("%x", digest)
 // }
 
 func verifyPassword(dbPassword, password string) bool {
-	hash := hmac.New(sha256.New, []byte(secretKey))
+	hash := hmac.New(sha256.New, []byte(SECRET_KEY))
 	mac2 := hash.Sum([]byte(password))
 	hmacPassword, err := hex.DecodeString(dbPassword)
 	if err != nil {

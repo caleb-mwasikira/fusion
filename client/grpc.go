@@ -2,31 +2,35 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
+	_ "embed"
 	"log"
-	"path/filepath"
 
 	"github.com/caleb-mwasikira/fusion/proto"
-	"github.com/caleb-mwasikira/fusion/utils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 )
 
+//go:embed certs/ca.crt
+var CA_CERT_DATA []byte
+
 // Returns an authenticated gRPC client
-func New_gRPC_Client() proto.FuseClient {
-	certFile := filepath.Join(utils.CertDir, "ca.crt")
-	transportCreds, err := credentials.NewClientTLSFromFile(certFile, "")
-	if err != nil {
-		log.Fatalf("[ERROR] generating gRPC client credentials; %v\n", err)
+func new_gRPC_client() proto.FuseClient {
+	certPool := x509.NewCertPool()
+	ok := certPool.AppendCertsFromPEM(CA_CERT_DATA)
+	if !ok {
+		log.Fatalln("Error loading custom CA cert file")
 	}
 
-	// Setup an unauthenticated connection
+	// Setup TLS connection
+	transportCreds := credentials.NewClientTLSFromCert(certPool, "")
 	conn, err := grpc.NewClient(
 		remote,
 		grpc.WithTransportCredentials(transportCreds),
 	)
 	if err != nil {
-		log.Fatalf("[ERROR] creating GRPC channel; %v\n", err)
+		log.Fatalf("Error creating GRPC channel; %v\n", err)
 	}
 
 	return proto.NewFuseClient(conn)

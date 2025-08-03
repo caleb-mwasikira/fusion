@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	db "github.com/caleb-mwasikira/fusion/database"
+	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/proto"
-	"github.com/caleb-mwasikira/fusion/utils"
+	"github.com/caleb-mwasikira/fusion/server/db"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -116,7 +116,11 @@ func (s FuseServer) CreateUser(ctx context.Context, req *proto.CreateUserRequest
 		return nil, status.Errorf(codes.NotFound, "Organization \"%v\" with department \"%v\" NOT found", req.OrgName, req.DeptName)
 	}
 
-	user, err := db.NewUser(req.Username, req.Password, req.OrgName, req.DeptName)
+	user, err := db.NewUser(
+		req.Username, req.Password,
+		req.OrgName, req.DeptName,
+		SECRET_KEY,
+	)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -224,7 +228,7 @@ func (s FuseServer) Attr(ctx context.Context, req *proto.Node) (*proto.FileAttr,
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
-	return utils.StatToFileAttr(&stat), nil
+	return lib.StatToFileAttr(&stat), nil
 }
 
 func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*proto.Node, error) {
@@ -239,7 +243,7 @@ func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*prot
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
-	attr := utils.FileInfoToFileAttr(info)
+	attr := lib.FileInfoToFileAttr(info)
 	return &proto.Node{
 		Path: req.Path,
 		Attr: attr,
@@ -268,7 +272,7 @@ func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.Node) (*proto.Rea
 			continue
 		}
 
-		attr := utils.FileInfoToFileAttr(info)
+		attr := lib.FileInfoToFileAttr(info)
 		entries = append(entries, &proto.Dirent{
 			Inode: attr.Inode,
 			Path:  filePath,
@@ -301,7 +305,7 @@ func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.
 	}
 	return &proto.Node{
 		Path: req.Path,
-		Attr: utils.StatToFileAttr(&stat),
+		Attr: lib.StatToFileAttr(&stat),
 	}, nil
 }
 
@@ -337,7 +341,7 @@ func (s FuseServer) Getattr(ctx context.Context, req *proto.Node) (*proto.FileAt
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
-	return utils.StatToFileAttr(&stat), nil
+	return lib.StatToFileAttr(&stat), nil
 }
 
 func (s FuseServer) Create(ctx context.Context, req *proto.CreateRequest) (*proto.CreateResponse, error) {
@@ -358,7 +362,7 @@ func (s FuseServer) Create(ctx context.Context, req *proto.CreateRequest) (*prot
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, err.Error())
 	}
-	attr := utils.FileInfoToFileAttr(info)
+	attr := lib.FileInfoToFileAttr(info)
 	return &proto.CreateResponse{
 		NodeId: attr.Inode,
 		Attr:   attr,
@@ -390,7 +394,7 @@ func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto
 	return &proto.LinkResponse{
 		Node: &proto.Node{
 			Path: req.NewPath,
-			Attr: utils.StatToFileAttr(&stat),
+			Attr: lib.StatToFileAttr(&stat),
 		},
 	}, nil
 }
@@ -420,7 +424,7 @@ func (s FuseServer) Link(ctx context.Context, req *proto.LinkRequest) (*proto.Li
 	return &proto.LinkResponse{
 		Node: &proto.Node{
 			Path: req.NewPath,
-			Attr: utils.StatToFileAttr(&stat),
+			Attr: lib.StatToFileAttr(&stat),
 		},
 	}, nil
 }

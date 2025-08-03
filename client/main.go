@@ -33,7 +33,7 @@ var (
 func init() {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("[ERROR] getting user's home dir; %v\n", err)
+		log.Fatalf("Error getting user's home dir; %v\n", err)
 	}
 
 	authFlag := flag.NewFlagSet("auth", flag.ExitOnError)
@@ -111,7 +111,7 @@ func init() {
 		log.Fatalln("Invalid command")
 	}
 
-	grpcClient = New_gRPC_Client()
+	grpcClient = new_gRPC_client()
 }
 
 func parseFlag(flagSet *flag.FlagSet) {
@@ -178,7 +178,7 @@ func runFileSystem() {
 		Password: password,
 	})
 	if err != nil {
-		log.Fatalf("[ERROR] authenticating with remote; %v\n", err)
+		log.Fatalf("Error authenticating with remote; %v\n", err)
 	}
 	authToken = response.Token
 
@@ -198,7 +198,7 @@ func runFileSystem() {
 			log.Println("Unmounting filesystem now")
 			err := fuseServer.Unmount()
 			if err != nil {
-				log.Printf("[ERROR] unmounting filesystem; %v\n", err)
+				log.Printf("Error unmounting filesystem; %v\n", err)
 			}
 		}
 
@@ -209,7 +209,7 @@ func runFileSystem() {
 		// Restart FUSE filesystem whenever it fails
 		select {
 		case err := <-errorChan:
-			log.Printf("[ERROR] mounting FUSE filesystem; %v\n", err)
+			log.Printf("Error mounting FUSE filesystem; %v\n", err)
 
 			numberFails += 1
 			if numberFails >= MAX_FAILS {
@@ -231,7 +231,7 @@ func main() {
 			Password: password,
 		})
 		if err != nil {
-			log.Fatalf("[ERROR] authenticating with remote; %v\n", err)
+			log.Fatalf("Error authenticating with remote; %v\n", err)
 		}
 		log.Println(response.Token)
 
@@ -246,7 +246,7 @@ func main() {
 			DeptName: deptName,
 		})
 		if err != nil {
-			log.Fatalf("[ERROR] creating user; %v\n", err)
+			log.Fatalf("Error creating user; %v\n", err)
 		}
 
 	case "create_dir":
@@ -255,7 +255,7 @@ func main() {
 			DeptName: deptName,
 		})
 		if err != nil {
-			log.Fatalf("[ERROR] creating organization; %v\n", err)
+			log.Fatalf("Error creating organization; %v\n", err)
 		}
 
 	default:

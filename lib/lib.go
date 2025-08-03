@@ -1,12 +1,10 @@
-package utils
+package lib
 
 import (
-	"fmt"
+	_ "embed"
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -16,14 +14,22 @@ import (
 )
 
 var (
-	ProjectDir, CertDir string
+	ProjectDir string
 )
 
 func init() {
-	_, file, _, _ := runtime.Caller(0)
-	utilsDir := filepath.Dir(file)
-	ProjectDir = filepath.Dir(utilsDir)
-	CertDir = filepath.Join(ProjectDir, "certs")
+	// Ensure project directory folder is created on
+	// users home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Error getting users home directory; %v\n", err)
+	}
+
+	ProjectDir = filepath.Join(homeDir, ".fusion")
+	err = os.MkdirAll(ProjectDir, 0755)
+	if err != nil {
+		log.Fatalf("Error creating project directory; %v\n", err)
+	}
 }
 
 func FileInfoToFileAttr(info os.FileInfo) *proto.FileAttr {
@@ -67,36 +73,4 @@ func FileAttrToFuseAttr(attr *proto.FileAttr) fuse.Attr {
 		},
 		Blksize: attr.BlockSize,
 	}
-}
-
-func LoadEnvFile(path string) error {
-	log.Println("Loading .env file")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid .env file format")
-		}
-
-		key := parts[0]
-		value := parts[1]
-		value = strings.Trim(value, "\"")
-
-		err := os.Setenv(key, value)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

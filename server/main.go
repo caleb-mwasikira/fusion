@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"embed"
 	"flag"
 	"fmt"
 	"log"
@@ -9,11 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/caleb-mwasikira/fusion/proto"
-	"github.com/caleb-mwasikira/fusion/utils"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
@@ -32,11 +33,14 @@ var (
 	userCtxKey key = "user"
 )
 
+//go:embed secret.txt
+var SECRET_KEY string
+
 func init() {
 	var help bool
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("[ERROR] getting user's home dir; %v\n", err)
+		log.Fatalf("Error getting user's home dir; %v\n", err)
 	}
 
 	flag.BoolVar(&debug, "debug", false, "Display FUSE debug logs to stdout.")
@@ -59,6 +63,11 @@ func init() {
 	// Ensure destination directory exists
 	if !dirExists(mountPoint) {
 		log.Fatalln("-mountpoint directory does not exist")
+	}
+
+	// Ensure SECRET_KEY is always set
+	if strings.TrimSpace(SECRET_KEY) == "" {
+		log.Fatalln("Missing SECRET_KEY env variable")
 	}
 }
 
@@ -98,6 +107,26 @@ func mountFileSystem(errorChan chan<- error) {
 	fuseServer.Wait()
 }
 
+//go:embed certs/server.crt
+//go:embed certs/server.key
+var certDir embed.FS
+
+func loadTLSCertificate() (tls.Certificate, error) {
+	// Read certificate data
+	certData, err := certDir.ReadFile("certs/server.crt")
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	// Read private key data
+	keyData, err := certDir.ReadFile("certs/server.key")
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.X509KeyPair(certData, keyData)
+}
+
 func start_gRPCServer(errorChan chan<- error) {
 	address := fmt.Sprintf(":%v", port)
 	log.Printf("Starting GRPC FUSE service on address; %v\n", address)
@@ -108,9 +137,7 @@ func start_gRPCServer(errorChan chan<- error) {
 		return
 	}
 
-	certFile := filepath.Join(utils.CertDir, "server.crt")
-	keyFile := filepath.Join(utils.CertDir, "server.key")
-	tlsCert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	tlsCert, err := loadTLSCertificate()
 	if err != nil {
 		errorChan <- err
 		return
@@ -155,7 +182,7 @@ func main() {
 			log.Println("Unmounting filesystem now")
 			err := fuseServer.Unmount()
 			if err != nil {
-				log.Printf("[ERROR] unmounting filesystem; %v\n", err)
+				log.Printf("Error unmounting filesystem; %v\n", err)
 			}
 		}
 
@@ -171,7 +198,7 @@ func main() {
 		// Restart FUSE filesystem whenever it fails
 		select {
 		case err := <-errorChan1:
-			log.Printf("[ERROR] mounting FUSE filesystem; %v\n", err)
+			log.Printf("Error mounting FUSE filesystem; %v\n", err)
 
 			numberFuseFails += 1
 			if numberFuseFails >= MAX_FAILS {
@@ -180,7 +207,7 @@ func main() {
 			go mountFileSystem(errorChan1)
 
 		case err := <-errorChan2:
-			log.Printf("[ERROR] running GRPC FUSE service; %v\n", err)
+			log.Printf("Error running GRPC FUSE service; %v\n", err)
 
 			numberGrpcFails += 1
 			if numberFuseFails >= MAX_FAILS {
