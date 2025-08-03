@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/caleb-mwasikira/fusion/utils"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
@@ -361,9 +360,30 @@ func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, 
 
 func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// log.Printf("Readdir %v\n", n.path)
-	entries, err := utils.ReadLocalDir(n.path)
+	entries := []fuse.DirEntry{}
+
+	files, err := os.ReadDir(n.path)
 	if err != nil {
 		return nil, fs.ToErrno(err)
+	}
+	for _, f := range files {
+		info, err := f.Info()
+		if err != nil {
+			continue
+		}
+
+		var mode uint32
+		if info.IsDir() {
+			mode = fuse.S_IFDIR | uint32(info.Mode().Perm())
+		} else {
+			mode = fuse.S_IFREG | uint32(info.Mode().Perm())
+		}
+
+		entries = append(entries, fuse.DirEntry{
+			Name: f.Name(),
+			Mode: mode,
+			Ino:  uint64(info.Sys().(*syscall.Stat_t).Ino),
+		})
 	}
 	return fs.NewListDirStream(entries), fs.OK
 }

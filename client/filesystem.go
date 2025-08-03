@@ -6,11 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/caleb-mwasikira/fusion/proto"
-	"github.com/caleb-mwasikira/fusion/utils"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -52,35 +50,29 @@ func (n *Node) OnAdd(ctx context.Context) {
 		return
 	}
 
-	// log.Printf("OnAdd %v\n", n.path)
+	log.Printf("[FUSE] OnAdd %v\n", n.path)
 
 	relativePath := n.relativePath(n.path)
-	response, err := grpcClient.ReadDirAll(ctx, &proto.Node{Path: relativePath})
+	entries, err := downloadRemoteEntries(ctx, relativePath)
 	if err != nil {
+		log.Printf("[ERROR] downloading remote entries; %v\n", err)
 		return
 	}
 
-	// Download directory tree and re-create it
-	wg := sync.WaitGroup{}
-	entries := response.GetEntries()
-
 	for _, entry := range entries {
-		wg.Add(1)
-		go func(wg *sync.WaitGroup, entry *proto.Dirent) {
-			defer wg.Done()
+		path := filepath.Join(rootDir, entry.Name)
+		name := filepath.Base(path)
 
-			path := filepath.Join(rootDir, entry.Path)
-			mode := os.FileMode(entry.Mode)
-
-			if mode.IsDir() {
-				err = os.MkdirAll(path, mode)
-			} else {
-				err = downloadRemoteFile(ctx, entry)
-			}
-		}(&wg, entry)
+		child := n.NewPersistentInode(
+			ctx,
+			&Node{path: path},
+			fs.StableAttr{
+				Ino:  entry.Ino,
+				Mode: entry.Mode,
+			},
+		)
+		n.AddChild(name, child, false)
 	}
-
-	wg.Wait()
 }
 
 func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
@@ -97,7 +89,7 @@ func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 
 func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	path := filepath.Join(n.path, name)
-	// log.Printf("Lookup %v\n", path)
+	// log.Printf("[FUSE] Lookup %v\n", path)
 
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(path, &stat)
@@ -153,7 +145,8 @@ func (n *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.En
 	path = n.relativePath(path)
 
 	go func(path string, mode uint32) {
-		_, err := grpcClient.Mkdir(context.TODO(), &proto.MkdirRequest{
+		ctx = NewAuthenticatedCtx(ctx)
+		_, err := grpcClient.Mkdir(ctx, &proto.MkdirRequest{
 			Path: path,
 			Mode: mode,
 		})
@@ -178,7 +171,8 @@ func (n *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 	path = n.relativePath(path)
 
 	go func(path string) {
-		_, err := grpcClient.Rmdir(context.TODO(), &proto.Node{
+		ctx = NewAuthenticatedCtx(ctx)
+		_, err := grpcClient.Rmdir(ctx, &proto.Node{
 			Path: path,
 		})
 		if err != nil {
@@ -203,7 +197,8 @@ func (n *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	path = n.relativePath(path)
 
 	go func(path string) {
-		_, err := grpcClient.Rmdir(context.TODO(), &proto.Node{
+		ctx = NewAuthenticatedCtx(ctx)
+		_, err := grpcClient.Rmdir(ctx, &proto.Node{
 			Path: path,
 		})
 		if err != nil {
@@ -265,7 +260,8 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 	newpath = n.relativePath(newpath)
 
 	go func(oldpath, newpath string) {
-		_, err := grpcClient.Rename(context.TODO(), &proto.RenameRequest{
+		ctx = NewAuthenticatedCtx(ctx)
+		_, err := grpcClient.Rename(ctx, &proto.RenameRequest{
 			OldPath: oldpath,
 			NewPath: newpath,
 		})
@@ -309,7 +305,8 @@ func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint3
 	path = n.relativePath(path)
 
 	go func(path string, flags uint32, mode uint32) {
-		grpcClient.Create(context.TODO(), &proto.CreateRequest{
+		ctx = NewAuthenticatedCtx(ctx)
+		grpcClient.Create(ctx, &proto.CreateRequest{
 			Path:  path,
 			Flags: flags,
 			Mode:  mode,
@@ -443,27 +440,47 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 }
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// log.Printf("OpendirHandle %v\n", n.path)
+	log.Printf("[FUSE] OpendirHandle %v\n", n.path)
 
-	ds, errno := fs.NewLoopbackDirStream(n.path)
-	if errno != 0 {
-		// log.Printf("OpendirHandle %v failed; %v\n", n.path, errno)
-		return nil, 0, errno
+	relativePath := n.relativePath(n.path)
+	entries, err := downloadRemoteEntries(ctx, relativePath)
+	if err != nil {
+		log.Printf("[ERROR] downloading remote entries; %v\n", err)
+		return nil, 0, fs.ToErrno(err)
 	}
-	return ds, 0, errno
+	return fs.NewListDirStream(entries), 0, fs.OK
 }
 
 func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// log.Printf("Readdir %v\n", n.path)
-	entries, err := utils.ReadLocalDir(n.path)
+	log.Printf("[FUSE] Readdir %v\n", n.path)
+
+	relativePath := n.relativePath(n.path)
+	entries, err := downloadRemoteEntries(ctx, relativePath)
 	if err != nil {
+		log.Printf("[ERROR] downloading remote entries; %v\n", err)
 		return nil, fs.ToErrno(err)
 	}
+
+	for _, entry := range entries {
+		path := filepath.Join(rootDir, entry.Name)
+		name := filepath.Base(path)
+
+		child := n.NewPersistentInode(
+			ctx,
+			&Node{path: path},
+			fs.StableAttr{
+				Ino:  entry.Ino,
+				Mode: entry.Mode,
+			},
+		)
+		n.AddChild(name, child, false)
+	}
+
 	return fs.NewListDirStream(entries), fs.OK
 }
 
 func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	// log.Printf("Getattr %v\n", n.path)
+	// log.Printf("[FUSE] Getattr %v\n", n.path)
 
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(n.path, &stat)

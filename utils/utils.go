@@ -1,13 +1,12 @@
 package utils
 
 import (
-	"crypto/md5"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,77 +16,14 @@ import (
 )
 
 var (
-	CertDir string
+	ProjectDir, CertDir string
 )
 
 func init() {
 	_, file, _, _ := runtime.Caller(0)
 	utilsDir := filepath.Dir(file)
-	projectDir := filepath.Dir(utilsDir)
-	CertDir = filepath.Join(projectDir, "certs")
-}
-
-func ReadLocalDir(path string) ([]fuse.DirEntry, error) {
-	entries := []fuse.DirEntry{}
-
-	files, err := os.ReadDir(path)
-	if err != nil {
-		return nil, err
-	}
-	for _, f := range files {
-		info, err := f.Info()
-		if err != nil {
-			continue
-		}
-
-		var mode uint32
-		if info.IsDir() {
-			mode = fuse.S_IFDIR | uint32(info.Mode().Perm())
-		} else {
-			mode = fuse.S_IFREG | uint32(info.Mode().Perm())
-		}
-
-		entries = append(entries, fuse.DirEntry{
-			Name: f.Name(),
-			Mode: mode,
-			Ino:  uint64(info.Sys().(*syscall.Stat_t).Ino),
-		})
-	}
-	return entries, nil
-}
-
-func CheckPermissions(path string) (bool, bool, bool) {
-	info, err := os.Stat(path)
-	if err != nil {
-		log.Printf("Error checking file stat; %v\n", err)
-		return false, false, false
-	}
-
-	stat := info.Sys().(*syscall.Stat_t)
-	mode := info.Mode().Perm()
-
-	// Get current process UID/GID
-	uid := os.Geteuid()
-	gid := os.Getegid()
-
-	var canRead, canWrite, canExec bool
-
-	switch {
-	case stat.Uid == uint32(uid):
-		canRead = mode&0400 != 0
-		canWrite = mode&0200 != 0
-		canExec = mode&0100 != 0
-	case stat.Gid == uint32(gid):
-		canRead = mode&0040 != 0
-		canWrite = mode&0020 != 0
-		canExec = mode&0010 != 0
-	default:
-		canRead = mode&0004 != 0
-		canWrite = mode&0002 != 0
-		canExec = mode&0001 != 0
-	}
-
-	return canRead, canWrite, canExec
+	ProjectDir = filepath.Dir(utilsDir)
+	CertDir = filepath.Join(ProjectDir, "certs")
 }
 
 func FileInfoToFileAttr(info os.FileInfo) *proto.FileAttr {
@@ -133,26 +69,34 @@ func FileAttrToFuseAttr(attr *proto.FileAttr) fuse.Attr {
 	}
 }
 
-func IsDirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return info.IsDir()
-}
+func LoadEnvFile(path string) error {
+	log.Println("Loading .env file")
 
-func HashFile(path string) (string, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return err
 	}
-	defer file.Close()
 
-	hash := md5.New()
-	_, err = io.Copy(hash, file)
-	if err != nil {
-		return "", err
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid .env file format")
+		}
+
+		key := parts[0]
+		value := parts[1]
+		value = strings.Trim(value, "\"")
+
+		err := os.Setenv(key, value)
+		if err != nil {
+			return err
+		}
 	}
-	digest := hash.Sum(nil)
-	return fmt.Sprintf("%x", digest), nil
+	return nil
 }

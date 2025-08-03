@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -19,6 +20,8 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+type key string
+
 var (
 	debug                bool
 	realPath, mountPoint string
@@ -26,13 +29,14 @@ var (
 
 	fuseServer *fuse.Server
 	grpcServer *grpc.Server
+	userCtxKey key = "user"
 )
 
 func init() {
 	var help bool
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("Error getting user's home dir; %v\n", err)
+		log.Fatalf("[ERROR] getting user's home dir; %v\n", err)
 	}
 
 	flag.BoolVar(&debug, "debug", false, "Display FUSE debug logs to stdout.")
@@ -48,17 +52,25 @@ func init() {
 	}
 
 	// Ensure realPath directory exists
-	if ok := utils.IsDirExists(realPath); !ok {
+	if !dirExists(realPath) {
 		log.Fatalln("-realpath directory does not exist")
 	}
 
 	// Ensure destination directory exists
-	if ok := utils.IsDirExists(mountPoint); !ok {
+	if !dirExists(mountPoint) {
 		log.Fatalln("-mountpoint directory does not exist")
 	}
 }
 
-func start_FUSE_FileSystem(errorChan chan<- error) {
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+func mountFileSystem(errorChan chan<- error) {
 	log.Printf("Mounting directory %v -> %v\n", realPath, mountPoint)
 
 	loopbackRoot, err := NewLoopbackRoot(realPath)
@@ -86,7 +98,7 @@ func start_FUSE_FileSystem(errorChan chan<- error) {
 	fuseServer.Wait()
 }
 
-func start_GRPC_FUSE_Service(errorChan chan<- error) {
+func start_gRPCServer(errorChan chan<- error) {
 	address := fmt.Sprintf(":%v", port)
 	log.Printf("Starting GRPC FUSE service on address; %v\n", address)
 
@@ -96,18 +108,26 @@ func start_GRPC_FUSE_Service(errorChan chan<- error) {
 		return
 	}
 
-	certFile := filepath.Join(utils.CertDir, "server_cert.pem")
-	keyFile := filepath.Join(utils.CertDir, "server_key.pem")
-	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+	certFile := filepath.Join(utils.CertDir, "server.crt")
+	keyFile := filepath.Join(utils.CertDir, "server.key")
+	tlsCert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		errorChan <- err
 		return
 	}
 
-	grpcServer = grpc.NewServer(grpc.Creds(creds))
-	proto.RegisterFuseServiceServer(grpcServer, GrpcFuseService{
-		path: mountPoint,
-	})
+	transportCreds := credentials.NewServerTLSFromCert(&tlsCert)
+	grpcServer = grpc.NewServer(
+		grpc.Creds(transportCreds),
+		grpc.UnaryInterceptor(AuthInterceptor),
+		grpc.StreamInterceptor(AuthStreamInterceptor),
+	)
+	proto.RegisterFuseServer(
+		grpcServer,
+		FuseServer{
+			path: mountPoint,
+		},
+	)
 	err = grpcServer.Serve(listener)
 	if err != nil {
 		errorChan <- err
@@ -118,8 +138,8 @@ func main() {
 	errorChan1 := make(chan error)
 	errorChan2 := make(chan error)
 
-	go start_FUSE_FileSystem(errorChan1)
-	go start_GRPC_FUSE_Service(errorChan2)
+	go mountFileSystem(errorChan1)
+	go start_gRPCServer(errorChan2)
 
 	const MAX_FAILS = 3
 	numberFuseFails := 0
@@ -135,7 +155,7 @@ func main() {
 			log.Println("Unmounting filesystem now")
 			err := fuseServer.Unmount()
 			if err != nil {
-				log.Printf("Error unmounting filesystem; %v\n", err)
+				log.Printf("[ERROR] unmounting filesystem; %v\n", err)
 			}
 		}
 
@@ -151,22 +171,22 @@ func main() {
 		// Restart FUSE filesystem whenever it fails
 		select {
 		case err := <-errorChan1:
-			log.Printf("Error mounting FUSE filesystem; %v\n", err)
+			log.Printf("[ERROR] mounting FUSE filesystem; %v\n", err)
 
 			numberFuseFails += 1
 			if numberFuseFails >= MAX_FAILS {
 				log.Fatalln("Too many attempts restarting failed FUSE filesystem")
 			}
-			go start_FUSE_FileSystem(errorChan1)
+			go mountFileSystem(errorChan1)
 
 		case err := <-errorChan2:
-			log.Printf("Error running GRPC FUSE service; %v\n", err)
+			log.Printf("[ERROR] running GRPC FUSE service; %v\n", err)
 
 			numberGrpcFails += 1
 			if numberFuseFails >= MAX_FAILS {
 				log.Fatalln("Too many attempts restarting failed GRPC FUSE service")
 			}
-			go start_GRPC_FUSE_Service(errorChan2)
+			go start_gRPCServer(errorChan2)
 
 		default:
 			time.Sleep(30 * time.Second)

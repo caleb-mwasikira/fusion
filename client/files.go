@@ -7,10 +7,14 @@ package main
 import (
 	"context"
 	"crypto/md5"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -128,7 +132,7 @@ func (f *FileHandle) Setlkw(ctx context.Context, owner uint64, lk *fuse.FileLock
 	return f.setLock(ctx, owner, lk, flags, true)
 }
 
-func (f *FileHandle) setLock(ctx context.Context, owner uint64, lk *fuse.FileLock, flags uint32, blocking bool) (errno syscall.Errno) {
+func (f *FileHandle) setLock(_ context.Context, _ uint64, lk *fuse.FileLock, flags uint32, blocking bool) (errno syscall.Errno) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if (flags & fuse.FUSE_LK_FLOCK) != 0 {
@@ -168,7 +172,7 @@ func (f *FileHandle) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.
 	return f.Getattr(ctx, out)
 }
 
-func (f *FileHandle) setAttr(ctx context.Context, in *fuse.SetAttrIn) syscall.Errno {
+func (f *FileHandle) setAttr(_ context.Context, in *fuse.SetAttrIn) syscall.Errno {
 	mode, ok := in.GetMode()
 	if ok {
 		err := syscall.Fchmod(f.fd, mode)
@@ -260,11 +264,92 @@ func (f *FileHandle) Lseek(ctx context.Context, off uint64, whence uint32) (uint
 // 	return int32(res), errno
 // }
 
-func downloadRemoteFile(ctx context.Context, remote *proto.Dirent) error {
-	path := filepath.Join(rootDir, remote.Path)
-	// log.Printf("Downloading remote file %v\n", path)
+func openOrCreateFile(path string, mode os.FileMode) (file *os.File, err error) {
+	file, err = os.OpenFile(path, os.O_RDWR, mode)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		// File does not exist; create it
+		file, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, mode)
+	}
+	return file, err
+}
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(remote.Mode))
+func downloadRemoteEntries(ctx context.Context, path string) ([]fuse.DirEntry, error) {
+	if strings.Contains(path, "Trash") {
+		return []fuse.DirEntry{}, nil
+	}
+
+	// Download directory tree and re-create it
+	ctx = NewAuthenticatedCtx(ctx)
+	response, err := grpcClient.ReadDirAll(ctx, &proto.Node{
+		Path: path,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	remoteEntries := response.GetEntries()
+	wg := &sync.WaitGroup{}
+	resultChan := make(chan fuse.DirEntry, len(remoteEntries))
+
+	for _, remoteEntry := range remoteEntries {
+		wg.Add(1)
+		go downloadRemoteEntry(ctx, wg, remoteEntry, resultChan)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	fuseEntries := []fuse.DirEntry{}
+	for fuseEntry := range resultChan {
+		fuseEntries = append(fuseEntries, fuseEntry)
+	}
+
+	return fuseEntries, nil
+}
+
+func downloadRemoteEntry(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+	remoteEntry *proto.Dirent,
+	resultChan chan<- fuse.DirEntry,
+) {
+	defer wg.Done()
+
+	child := fuse.DirEntry{
+		Ino:  remoteEntry.Inode,
+		Name: remoteEntry.Path,
+	}
+	path := filepath.Join(rootDir, remoteEntry.Path)
+	mode := os.FileMode(remoteEntry.Mode)
+
+	if mode.IsDir() {
+		err := os.MkdirAll(path, mode)
+		if err != nil {
+			log.Printf("[ERROR] creating local directory; %v\n", err)
+			return
+		}
+		child.Mode = fuse.S_IFDIR | uint32(mode.Perm())
+	}
+
+	if mode.IsRegular() {
+		err := downloadRemoteFile(ctx, remoteEntry.Path)
+		if err != nil {
+			log.Printf("[ERROR] downloading remote file; %v\n", err)
+			return
+		}
+		child.Mode = fuse.S_IFREG | uint32(mode.Perm())
+	}
+
+	resultChan <- child
+}
+
+func downloadRemoteFile(ctx context.Context, remotePath string) error {
+	log.Printf("[INFO] Downloading remote file \"%v\"\n", remotePath)
+
+	localPath := filepath.Join(rootDir, remotePath)
+	file, err := openOrCreateFile(localPath, os.FileMode(0755))
 	if err != nil {
 		return err
 	}
@@ -278,13 +363,14 @@ func downloadRemoteFile(ctx context.Context, remote *proto.Dirent) error {
 	if err != nil {
 		return err
 	}
-	localFileHash := fmt.Sprintf("%x", md5.Sum(nil))
+	digest := hash.Sum(nil)
+	localFileHash := hex.EncodeToString(digest)
 
 	// Download file
 	stream, err := grpcClient.DownloadFile(
 		ctx,
 		&proto.DownloadRequest{
-			Path:         remote.Path,
+			Path:         remotePath,
 			ExpectedHash: localFileHash,
 		},
 	)
@@ -316,11 +402,15 @@ func downloadRemoteFile(ctx context.Context, remote *proto.Dirent) error {
 	if totalExpectedSize == -1 || recvBytes == 0 {
 		// No file received and no error means we have the same
 		// local file as remote
+		log.Printf("[INFO] Download file \"%v\" NOT required as local file hash matches remote", remotePath)
 		return nil
 	}
+	log.Printf("[DEBUG] Received %v bytes of data from network\n", recvBytes)
 
 	if totalExpectedSize != -1 && recvBytes != totalExpectedSize {
 		return fmt.Errorf("expected file of size %v but got %v bytes instead", totalExpectedSize, recvBytes)
 	}
+
+	log.Printf("[INFO] Download file \"%v\" successfull\n", remotePath)
 	return nil
 }
