@@ -9,22 +9,27 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/caleb-mwasikira/fusion/lib/events"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
 )
 
+type FileHandle struct {
+	mu   sync.Mutex
+	fd   int
+	path string
+}
+
 // NewLoopbackFile creates a FileHandle out of a file descriptor. All
 // operations are implemented. When using the Fd from a *os.File, call
 // syscall.Dup() on the fd, to avoid os.File's finalizer from closing
 // the file descriptor.
-func NewLoopbackFile(fd int) fs.FileHandle {
-	return &FileHandle{fd: fd}
-}
-
-type FileHandle struct {
-	mu sync.Mutex
-	fd int
+func NewLoopbackFile(fd int, path string) fs.FileHandle {
+	return &FileHandle{
+		fd:   fd,
+		path: path,
+	}
 }
 
 var _ = (fs.FileHandle)((*FileHandle)(nil))
@@ -61,6 +66,13 @@ func (f *FileHandle) Write(ctx context.Context, data []byte, off int64) (uint32,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n, err := syscall.Pwrite(f.fd, data, off)
+	if err != nil {
+		return 0, fs.ToErrno(err)
+	}
+
+	go notifyObservers(
+		events.MODIFY_FILE, f.path, "", 0,
+	)
 	return uint32(n), fs.ToErrno(err)
 }
 
@@ -122,7 +134,7 @@ func (f *FileHandle) Setlkw(ctx context.Context, owner uint64, lk *fuse.FileLock
 	return f.setLock(ctx, owner, lk, flags, true)
 }
 
-func (f *FileHandle) setLock(ctx context.Context, owner uint64, lk *fuse.FileLock, flags uint32, blocking bool) (errno syscall.Errno) {
+func (f *FileHandle) setLock(_ context.Context, _ uint64, lk *fuse.FileLock, flags uint32, blocking bool) (errno syscall.Errno) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if (flags & fuse.FUSE_LK_FLOCK) != 0 {
@@ -155,14 +167,6 @@ func (f *FileHandle) setLock(ctx context.Context, owner uint64, lk *fuse.FileLoc
 }
 
 func (f *FileHandle) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	if errno := f.setAttr(ctx, in); errno != 0 {
-		return errno
-	}
-
-	return f.Getattr(ctx, out)
-}
-
-func (f *FileHandle) setAttr(ctx context.Context, in *fuse.SetAttrIn) syscall.Errno {
 	mode, ok := in.GetMode()
 	if ok {
 		err := syscall.Fchmod(f.fd, mode)
@@ -205,7 +209,8 @@ func (f *FileHandle) setAttr(ctx context.Context, in *fuse.SetAttrIn) syscall.Er
 			return fs.ToErrno(err)
 		}
 	}
-	return fs.OK
+
+	return f.Getattr(ctx, out)
 }
 
 func (f *FileHandle) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {

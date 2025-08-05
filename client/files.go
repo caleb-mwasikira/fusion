@@ -6,15 +6,7 @@ package main
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"io"
 	"log"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -24,17 +16,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type FileHandle struct {
+	mu   sync.Mutex
+	fd   int
+	path string
+}
+
 // NewLoopbackFile creates a FileHandle out of a file descriptor. All
 // operations are implemented. When using the Fd from a *os.File, call
 // syscall.Dup() on the fd, to avoid os.File's finalizer from closing
 // the file descriptor.
-func NewLoopbackFile(fd int) fs.FileHandle {
-	return &FileHandle{fd: fd}
-}
-
-type FileHandle struct {
-	mu sync.Mutex
-	fd int
+func NewLoopbackFile(fd int, path string) fs.FileHandle {
+	return &FileHandle{
+		fd:   fd,
+		path: path,
+	}
 }
 
 var _ = (fs.FileHandle)((*FileHandle)(nil))
@@ -71,6 +67,25 @@ func (f *FileHandle) Write(ctx context.Context, data []byte, off int64) (uint32,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n, err := syscall.Pwrite(f.fd, data, off)
+	if err != nil {
+		return 0, fs.ToErrno(err)
+	}
+
+	// Write remote file
+	relativePath := relativePath(f.path)
+
+	go func(path string) {
+		ctx = NewAuthenticatedCtx(ctx)
+		_, err := grpcClient.Write(ctx, &proto.WriteRequest{
+			Path:   path,
+			Offset: off,
+			Data:   data,
+		})
+		if err != nil {
+			log.Printf("[ERROR] writing to remote file; %v\n", err)
+		}
+	}(relativePath)
+
 	return uint32(n), fs.ToErrno(err)
 }
 
@@ -92,7 +107,6 @@ func (f *FileHandle) Flush(ctx context.Context) syscall.Errno {
 	// want to really close the file, we just want to flush. This
 	// is achieved by closing a dup'd fd.
 	newFd, err := syscall.Dup(f.fd)
-
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -165,14 +179,6 @@ func (f *FileHandle) setLock(_ context.Context, _ uint64, lk *fuse.FileLock, fla
 }
 
 func (f *FileHandle) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	if errno := f.setAttr(ctx, in); errno != 0 {
-		return errno
-	}
-
-	return f.Getattr(ctx, out)
-}
-
-func (f *FileHandle) setAttr(_ context.Context, in *fuse.SetAttrIn) syscall.Errno {
 	mode, ok := in.GetMode()
 	if ok {
 		err := syscall.Fchmod(f.fd, mode)
@@ -215,7 +221,8 @@ func (f *FileHandle) setAttr(_ context.Context, in *fuse.SetAttrIn) syscall.Errn
 			return fs.ToErrno(err)
 		}
 	}
-	return fs.OK
+
+	return f.Getattr(ctx, out)
 }
 
 func (f *FileHandle) Getattr(ctx context.Context, a *fuse.AttrOut) syscall.Errno {
@@ -263,154 +270,3 @@ func (f *FileHandle) Lseek(ctx context.Context, off uint64, whence uint32) (uint
 // 	res, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(f.fd), uintptr(cmd), argWord)
 // 	return int32(res), errno
 // }
-
-func openOrCreateFile(path string, mode os.FileMode) (file *os.File, err error) {
-	file, err = os.OpenFile(path, os.O_RDWR, mode)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
-		// File does not exist; create it
-		file, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, mode)
-	}
-	return file, err
-}
-
-func downloadRemoteEntries(ctx context.Context, path string) ([]fuse.DirEntry, error) {
-	if strings.Contains(path, "Trash") {
-		return []fuse.DirEntry{}, nil
-	}
-
-	// Download directory tree and re-create it
-	ctx = NewAuthenticatedCtx(ctx)
-	response, err := grpcClient.ReadDirAll(ctx, &proto.Node{
-		Path: path,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	remoteEntries := response.GetEntries()
-	wg := &sync.WaitGroup{}
-	resultChan := make(chan fuse.DirEntry, len(remoteEntries))
-
-	for _, remoteEntry := range remoteEntries {
-		wg.Add(1)
-		go downloadRemoteEntry(ctx, wg, remoteEntry, resultChan)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	fuseEntries := []fuse.DirEntry{}
-	for fuseEntry := range resultChan {
-		fuseEntries = append(fuseEntries, fuseEntry)
-	}
-
-	return fuseEntries, nil
-}
-
-func downloadRemoteEntry(
-	ctx context.Context,
-	wg *sync.WaitGroup,
-	remoteEntry *proto.Dirent,
-	resultChan chan<- fuse.DirEntry,
-) {
-	defer wg.Done()
-
-	child := fuse.DirEntry{
-		Ino:  remoteEntry.Inode,
-		Name: remoteEntry.Path,
-	}
-	path := filepath.Join(rootDir, remoteEntry.Path)
-	mode := os.FileMode(remoteEntry.Mode)
-
-	if mode.IsDir() {
-		err := os.MkdirAll(path, mode)
-		if err != nil {
-			log.Printf("[ERROR] creating local directory; %v\n", err)
-			return
-		}
-		child.Mode = fuse.S_IFDIR | uint32(mode.Perm())
-	}
-
-	if mode.IsRegular() {
-		err := downloadRemoteFile(ctx, remoteEntry.Path)
-		if err != nil {
-			log.Printf("[ERROR] downloading remote file; %v\n", err)
-			return
-		}
-		child.Mode = fuse.S_IFREG | uint32(mode.Perm())
-	}
-
-	resultChan <- child
-}
-
-func downloadRemoteFile(ctx context.Context, remotePath string) error {
-	log.Printf("[INFO] Downloading remote file \"%v\"\n", remotePath)
-
-	localPath := filepath.Join(rootDir, remotePath)
-	file, err := openOrCreateFile(localPath, os.FileMode(0755))
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	// Remote is a file;
-	// We need to check for any file changes on remote and
-	// download them
-	hash := md5.New()
-	_, err = io.Copy(hash, file)
-	if err != nil {
-		return err
-	}
-	digest := hash.Sum(nil)
-	localFileHash := hex.EncodeToString(digest)
-
-	// Download file
-	stream, err := grpcClient.DownloadFile(
-		ctx,
-		&proto.DownloadRequest{
-			Path:         remotePath,
-			ExpectedHash: localFileHash,
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	totalExpectedSize := -1
-	recvBytes := 0
-	for {
-		chunk, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		if totalExpectedSize == -1 {
-			totalExpectedSize = int(chunk.TotalSize)
-		}
-
-		n, err := file.WriteAt(chunk.Data, chunk.Offset)
-		if err != nil {
-			return err
-		}
-		recvBytes += n
-	}
-
-	if totalExpectedSize == -1 || recvBytes == 0 {
-		// No file received and no error means we have the same
-		// local file as remote
-		log.Printf("[INFO] Download file \"%v\" NOT required as local file hash matches remote", remotePath)
-		return nil
-	}
-	log.Printf("[DEBUG] Received %v bytes of data from network\n", recvBytes)
-
-	if totalExpectedSize != -1 && recvBytes != totalExpectedSize {
-		return fmt.Errorf("expected file of size %v but got %v bytes instead", totalExpectedSize, recvBytes)
-	}
-
-	log.Printf("[INFO] Download file \"%v\" successfull\n", remotePath)
-	return nil
-}

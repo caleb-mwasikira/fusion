@@ -20,21 +20,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Fuse_Auth_FullMethodName         = "/Fuse/Auth"
-	Fuse_CreateOrg_FullMethodName    = "/Fuse/CreateOrg"
-	Fuse_CreateUser_FullMethodName   = "/Fuse/CreateUser"
-	Fuse_DownloadFile_FullMethodName = "/Fuse/DownloadFile"
-	Fuse_Lookup_FullMethodName       = "/Fuse/Lookup"
-	Fuse_ReadDirAll_FullMethodName   = "/Fuse/ReadDirAll"
-	Fuse_Mkdir_FullMethodName        = "/Fuse/Mkdir"
-	Fuse_Rmdir_FullMethodName        = "/Fuse/Rmdir"
-	Fuse_Getattr_FullMethodName      = "/Fuse/Getattr"
-	Fuse_Create_FullMethodName       = "/Fuse/Create"
-	Fuse_Symlink_FullMethodName      = "/Fuse/Symlink"
-	Fuse_Link_FullMethodName         = "/Fuse/Link"
-	Fuse_ReadAll_FullMethodName      = "/Fuse/ReadAll"
-	Fuse_Write_FullMethodName        = "/Fuse/Write"
-	Fuse_Rename_FullMethodName       = "/Fuse/Rename"
+	Fuse_Auth_FullMethodName               = "/Fuse/Auth"
+	Fuse_CreateOrg_FullMethodName          = "/Fuse/CreateOrg"
+	Fuse_CreateUser_FullMethodName         = "/Fuse/CreateUser"
+	Fuse_DownloadFile_FullMethodName       = "/Fuse/DownloadFile"
+	Fuse_ObserveFileChanges_FullMethodName = "/Fuse/ObserveFileChanges"
+	Fuse_Lookup_FullMethodName             = "/Fuse/Lookup"
+	Fuse_ReadDirAll_FullMethodName         = "/Fuse/ReadDirAll"
+	Fuse_Mkdir_FullMethodName              = "/Fuse/Mkdir"
+	Fuse_Rmdir_FullMethodName              = "/Fuse/Rmdir"
+	Fuse_Getattr_FullMethodName            = "/Fuse/Getattr"
+	Fuse_Create_FullMethodName             = "/Fuse/Create"
+	Fuse_Symlink_FullMethodName            = "/Fuse/Symlink"
+	Fuse_Link_FullMethodName               = "/Fuse/Link"
+	Fuse_ReadAll_FullMethodName            = "/Fuse/ReadAll"
+	Fuse_Write_FullMethodName              = "/Fuse/Write"
+	Fuse_Rename_FullMethodName             = "/Fuse/Rename"
 )
 
 // FuseClient is the client API for Fuse service.
@@ -45,16 +46,17 @@ type FuseClient interface {
 	CreateOrg(ctx context.Context, in *CreateOrgRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	DownloadFile(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileChunk], error)
+	ObserveFileChanges(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileEvent], error)
 	// FUSE functions
-	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*Node, error)
-	ReadDirAll(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ReadDirAllResponse, error)
-	Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*Node, error)
-	Rmdir(ctx context.Context, in *Node, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	Getattr(ctx context.Context, in *Node, opts ...grpc.CallOption) (*FileAttr, error)
+	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*DirEntry, error)
+	ReadDirAll(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*ReadDirAllResponse, error)
+	Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*DirEntry, error)
+	Rmdir(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Getattr(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*FileAttr, error)
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
 	Symlink(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error)
 	Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error)
-	ReadAll(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ReadAllResponse, error)
+	ReadAll(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*ReadAllResponse, error)
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
 	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
@@ -116,9 +118,28 @@ func (c *fuseClient) DownloadFile(ctx context.Context, in *DownloadRequest, opts
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Fuse_DownloadFileClient = grpc.ServerStreamingClient[FileChunk]
 
-func (c *fuseClient) Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*Node, error) {
+func (c *fuseClient) ObserveFileChanges(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Node)
+	stream, err := c.cc.NewStream(ctx, &Fuse_ServiceDesc.Streams[1], Fuse_ObserveFileChanges_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[emptypb.Empty, FileEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Fuse_ObserveFileChangesClient = grpc.ServerStreamingClient[FileEvent]
+
+func (c *fuseClient) Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*DirEntry, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DirEntry)
 	err := c.cc.Invoke(ctx, Fuse_Lookup_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -126,7 +147,7 @@ func (c *fuseClient) Lookup(ctx context.Context, in *LookupRequest, opts ...grpc
 	return out, nil
 }
 
-func (c *fuseClient) ReadDirAll(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ReadDirAllResponse, error) {
+func (c *fuseClient) ReadDirAll(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*ReadDirAllResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReadDirAllResponse)
 	err := c.cc.Invoke(ctx, Fuse_ReadDirAll_FullMethodName, in, out, cOpts...)
@@ -136,9 +157,9 @@ func (c *fuseClient) ReadDirAll(ctx context.Context, in *Node, opts ...grpc.Call
 	return out, nil
 }
 
-func (c *fuseClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*Node, error) {
+func (c *fuseClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*DirEntry, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Node)
+	out := new(DirEntry)
 	err := c.cc.Invoke(ctx, Fuse_Mkdir_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -146,7 +167,7 @@ func (c *fuseClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.C
 	return out, nil
 }
 
-func (c *fuseClient) Rmdir(ctx context.Context, in *Node, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *fuseClient) Rmdir(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, Fuse_Rmdir_FullMethodName, in, out, cOpts...)
@@ -156,7 +177,7 @@ func (c *fuseClient) Rmdir(ctx context.Context, in *Node, opts ...grpc.CallOptio
 	return out, nil
 }
 
-func (c *fuseClient) Getattr(ctx context.Context, in *Node, opts ...grpc.CallOption) (*FileAttr, error) {
+func (c *fuseClient) Getattr(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*FileAttr, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FileAttr)
 	err := c.cc.Invoke(ctx, Fuse_Getattr_FullMethodName, in, out, cOpts...)
@@ -196,7 +217,7 @@ func (c *fuseClient) Link(ctx context.Context, in *LinkRequest, opts ...grpc.Cal
 	return out, nil
 }
 
-func (c *fuseClient) ReadAll(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ReadAllResponse, error) {
+func (c *fuseClient) ReadAll(ctx context.Context, in *DirEntry, opts ...grpc.CallOption) (*ReadAllResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReadAllResponse)
 	err := c.cc.Invoke(ctx, Fuse_ReadAll_FullMethodName, in, out, cOpts...)
@@ -234,16 +255,17 @@ type FuseServer interface {
 	CreateOrg(context.Context, *CreateOrgRequest) (*emptypb.Empty, error)
 	CreateUser(context.Context, *CreateUserRequest) (*emptypb.Empty, error)
 	DownloadFile(*DownloadRequest, grpc.ServerStreamingServer[FileChunk]) error
+	ObserveFileChanges(*emptypb.Empty, grpc.ServerStreamingServer[FileEvent]) error
 	// FUSE functions
-	Lookup(context.Context, *LookupRequest) (*Node, error)
-	ReadDirAll(context.Context, *Node) (*ReadDirAllResponse, error)
-	Mkdir(context.Context, *MkdirRequest) (*Node, error)
-	Rmdir(context.Context, *Node) (*emptypb.Empty, error)
-	Getattr(context.Context, *Node) (*FileAttr, error)
+	Lookup(context.Context, *LookupRequest) (*DirEntry, error)
+	ReadDirAll(context.Context, *DirEntry) (*ReadDirAllResponse, error)
+	Mkdir(context.Context, *MkdirRequest) (*DirEntry, error)
+	Rmdir(context.Context, *DirEntry) (*emptypb.Empty, error)
+	Getattr(context.Context, *DirEntry) (*FileAttr, error)
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
 	Symlink(context.Context, *LinkRequest) (*LinkResponse, error)
 	Link(context.Context, *LinkRequest) (*LinkResponse, error)
-	ReadAll(context.Context, *Node) (*ReadAllResponse, error)
+	ReadAll(context.Context, *DirEntry) (*ReadAllResponse, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
 	Rename(context.Context, *RenameRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedFuseServer()
@@ -268,19 +290,22 @@ func (UnimplementedFuseServer) CreateUser(context.Context, *CreateUserRequest) (
 func (UnimplementedFuseServer) DownloadFile(*DownloadRequest, grpc.ServerStreamingServer[FileChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method DownloadFile not implemented")
 }
-func (UnimplementedFuseServer) Lookup(context.Context, *LookupRequest) (*Node, error) {
+func (UnimplementedFuseServer) ObserveFileChanges(*emptypb.Empty, grpc.ServerStreamingServer[FileEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method ObserveFileChanges not implemented")
+}
+func (UnimplementedFuseServer) Lookup(context.Context, *LookupRequest) (*DirEntry, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Lookup not implemented")
 }
-func (UnimplementedFuseServer) ReadDirAll(context.Context, *Node) (*ReadDirAllResponse, error) {
+func (UnimplementedFuseServer) ReadDirAll(context.Context, *DirEntry) (*ReadDirAllResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReadDirAll not implemented")
 }
-func (UnimplementedFuseServer) Mkdir(context.Context, *MkdirRequest) (*Node, error) {
+func (UnimplementedFuseServer) Mkdir(context.Context, *MkdirRequest) (*DirEntry, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Mkdir not implemented")
 }
-func (UnimplementedFuseServer) Rmdir(context.Context, *Node) (*emptypb.Empty, error) {
+func (UnimplementedFuseServer) Rmdir(context.Context, *DirEntry) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Rmdir not implemented")
 }
-func (UnimplementedFuseServer) Getattr(context.Context, *Node) (*FileAttr, error) {
+func (UnimplementedFuseServer) Getattr(context.Context, *DirEntry) (*FileAttr, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Getattr not implemented")
 }
 func (UnimplementedFuseServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
@@ -292,7 +317,7 @@ func (UnimplementedFuseServer) Symlink(context.Context, *LinkRequest) (*LinkResp
 func (UnimplementedFuseServer) Link(context.Context, *LinkRequest) (*LinkResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Link not implemented")
 }
-func (UnimplementedFuseServer) ReadAll(context.Context, *Node) (*ReadAllResponse, error) {
+func (UnimplementedFuseServer) ReadAll(context.Context, *DirEntry) (*ReadAllResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReadAll not implemented")
 }
 func (UnimplementedFuseServer) Write(context.Context, *WriteRequest) (*WriteResponse, error) {
@@ -387,6 +412,17 @@ func _Fuse_DownloadFile_Handler(srv interface{}, stream grpc.ServerStream) error
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Fuse_DownloadFileServer = grpc.ServerStreamingServer[FileChunk]
 
+func _Fuse_ObserveFileChanges_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(emptypb.Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FuseServer).ObserveFileChanges(m, &grpc.GenericServerStream[emptypb.Empty, FileEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Fuse_ObserveFileChangesServer = grpc.ServerStreamingServer[FileEvent]
+
 func _Fuse_Lookup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LookupRequest)
 	if err := dec(in); err != nil {
@@ -406,7 +442,7 @@ func _Fuse_Lookup_Handler(srv interface{}, ctx context.Context, dec func(interfa
 }
 
 func _Fuse_ReadDirAll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Node)
+	in := new(DirEntry)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -418,7 +454,7 @@ func _Fuse_ReadDirAll_Handler(srv interface{}, ctx context.Context, dec func(int
 		FullMethod: Fuse_ReadDirAll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).ReadDirAll(ctx, req.(*Node))
+		return srv.(FuseServer).ReadDirAll(ctx, req.(*DirEntry))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -442,7 +478,7 @@ func _Fuse_Mkdir_Handler(srv interface{}, ctx context.Context, dec func(interfac
 }
 
 func _Fuse_Rmdir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Node)
+	in := new(DirEntry)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -454,13 +490,13 @@ func _Fuse_Rmdir_Handler(srv interface{}, ctx context.Context, dec func(interfac
 		FullMethod: Fuse_Rmdir_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).Rmdir(ctx, req.(*Node))
+		return srv.(FuseServer).Rmdir(ctx, req.(*DirEntry))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _Fuse_Getattr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Node)
+	in := new(DirEntry)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -472,7 +508,7 @@ func _Fuse_Getattr_Handler(srv interface{}, ctx context.Context, dec func(interf
 		FullMethod: Fuse_Getattr_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).Getattr(ctx, req.(*Node))
+		return srv.(FuseServer).Getattr(ctx, req.(*DirEntry))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -532,7 +568,7 @@ func _Fuse_Link_Handler(srv interface{}, ctx context.Context, dec func(interface
 }
 
 func _Fuse_ReadAll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Node)
+	in := new(DirEntry)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -544,7 +580,7 @@ func _Fuse_ReadAll_Handler(srv interface{}, ctx context.Context, dec func(interf
 		FullMethod: Fuse_ReadAll_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).ReadAll(ctx, req.(*Node))
+		return srv.(FuseServer).ReadAll(ctx, req.(*DirEntry))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -653,6 +689,11 @@ var Fuse_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "DownloadFile",
 			Handler:       _Fuse_DownloadFile_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ObserveFileChanges",
+			Handler:       _Fuse_ObserveFileChanges_Handler,
 			ServerStreams: true,
 		},
 	},

@@ -74,7 +74,7 @@ func StatToFileAttr(stat *syscall.Stat_t) *proto.FileAttr {
 	changeTime := time.Unix(0, stat.Ctim.Nsec)
 
 	return &proto.FileAttr{
-		Inode: stat.Ino,
+		Ino:   stat.Ino,
 		Size:  uint64(stat.Size),
 		ATime: timestamppb.New(accessTime),
 		MTime: timestamppb.New(modifiedTime),
@@ -91,7 +91,7 @@ func StatToFileAttr(stat *syscall.Stat_t) *proto.FileAttr {
 
 func FileAttrToFuseAttr(attr *proto.FileAttr) fuse.Attr {
 	return fuse.Attr{
-		Ino:   attr.Inode,
+		Ino:   attr.Ino,
 		Size:  attr.Size,
 		Atime: uint64(attr.ATime.Nanos),
 		Mtime: uint64(attr.MTime.Nanos),

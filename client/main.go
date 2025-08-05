@@ -127,7 +127,10 @@ func parseFlag(flagSet *flag.FlagSet) {
 func mountFileSystem(errorChan chan<- error) {
 	log.Printf("Mounting directory %v -> %v\n", realpath, mountpoint)
 
-	loopbackRoot, err := NewLoopbackRoot(realpath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fileSystem, err := NewFileSystem(ctx, realpath)
 	if err != nil {
 		errorChan <- fmt.Errorf("error creating loopback Root directory; %v", err)
 		return
@@ -135,7 +138,7 @@ func mountFileSystem(errorChan chan<- error) {
 
 	fuseServer, err = fs.Mount(
 		mountpoint,
-		loopbackRoot,
+		fileSystem,
 		&fs.Options{
 			MountOptions: fuse.MountOptions{
 				AllowOther: true,
@@ -150,6 +153,10 @@ func mountFileSystem(errorChan chan<- error) {
 		return
 	}
 	fuseServer.Wait()
+
+	// If we reach here the filesystem has been unmounted by user
+	// exit program
+	log.Fatalln("Filesystem unmounted by user")
 }
 
 func dirExists(path string) bool {
@@ -168,7 +175,11 @@ func runFileSystem() {
 
 	// Ensure mountpoint directory exists
 	if !dirExists(mountpoint) {
-		log.Fatalln("-mountpoint directory does not exist")
+		log.Println("-mountpoint directory does not exist")
+		err := os.Mkdir(mountpoint, 0755)
+		if err != nil {
+			log.Fatalf("Error creating mount directory; %v\n", err)
+		}
 	}
 
 	// Before we mount the FUSE file system first lets
@@ -224,6 +235,16 @@ func runFileSystem() {
 }
 
 func main() {
+	defer func() {
+		// recover() will return a non-nil value if a panic occurred.
+		if r := recover(); r != nil {
+			log.Printf("A panic occurred: %v. Exiting gracefully.", r)
+			// You can perform cleanup actions here.
+			// For example, closing files or network connections.
+			os.Exit(1) // Exit with a non-zero status to indicate an error.
+		}
+	}()
+
 	switch command {
 	case "auth":
 		response, err := grpcClient.Auth(context.Background(), &proto.AuthRequest{

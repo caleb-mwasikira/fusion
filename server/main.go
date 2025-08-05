@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"embed"
 	"flag"
@@ -85,10 +86,14 @@ func mountFileSystem(errorChan chan<- error) {
 
 	// Ensure mountpoint directory exists
 	if !dirExists(mountpoint) {
-		log.Fatalln("-mountpoint directory does not exist")
+		log.Println("-mountpoint directory does not exist")
+		err := os.Mkdir(mountpoint, 0755)
+		if err != nil {
+			log.Fatalf("Error creating mount directory; %v\n", err)
+		}
 	}
 
-	loopbackRoot, err := NewLoopbackRoot(realpath)
+	fileSystem, err := NewFileSystem(realpath)
 	if err != nil {
 		errorChan <- fmt.Errorf("error creating loopback Root directory; %v", err)
 		return
@@ -96,7 +101,7 @@ func mountFileSystem(errorChan chan<- error) {
 
 	fuseServer, err = fs.Mount(
 		mountpoint,
-		loopbackRoot,
+		fileSystem,
 		&fs.Options{
 			MountOptions: fuse.MountOptions{
 				AllowOther: true,
@@ -111,6 +116,10 @@ func mountFileSystem(errorChan chan<- error) {
 		return
 	}
 	fuseServer.Wait()
+
+	// If we reach here the filesystem has been unmounted by user
+	// exit program
+	log.Fatalln("Filesystem unmounted by user")
 }
 
 //go:embed certs/server.crt
@@ -135,8 +144,6 @@ func loadTLSCertificate() (tls.Certificate, error) {
 
 func start_gRPCServer(errorChan chan<- error) {
 	address := fmt.Sprintf(":%v", port)
-	log.Printf("Starting GRPC FUSE service on address; %v\n", address)
-
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		errorChan <- err
@@ -155,12 +162,15 @@ func start_gRPCServer(errorChan chan<- error) {
 		grpc.UnaryInterceptor(AuthInterceptor),
 		grpc.StreamInterceptor(AuthStreamInterceptor),
 	)
-	proto.RegisterFuseServer(
-		grpcServer,
-		FuseServer{
-			path: mountpoint,
-		},
-	)
+
+	// Create new FuseServer instance
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fuseServer := NewFuseServer(ctx, mountpoint)
+	proto.RegisterFuseServer(grpcServer, fuseServer)
+
+	log.Printf("Starting GRPC server on address; %v\n", address)
 	err = grpcServer.Serve(listener)
 	if err != nil {
 		errorChan <- err

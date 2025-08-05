@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -23,13 +24,44 @@ import (
 type FuseServer struct {
 	proto.UnimplementedFuseServer
 
-	path string // Real path to where files are stored
+	// Real path to where files are stored
+	path string
+}
+
+func NewFuseServer(ctx context.Context, path string) FuseServer {
+	go startMainObserver(ctx)
+
+	return FuseServer{
+		path: mountpoint,
+	}
 }
 
 var _ = (proto.FuseServer)((*FuseServer)(nil))
 
-func (s FuseServer) relativePath(path string) string {
-	return strings.TrimPrefix(path, s.path)
+// Gets the logged in user's root directory
+//
+//	returns:
+//		string: path they are allowed access to
+//		error: if access is denied
+func getUsersDir(ctx context.Context) (string, error) {
+	user, ok := ctx.Value(userCtxKey).(*db.User)
+	if !ok {
+		// Usr is NOT logged in
+		// The system should never reach this state as we are relying on the
+		// auth interceptor to filter unauthenticated gRPC requests
+		return "", errors.New("user not logged in")
+	}
+
+	fullpath := filepath.Join(mountpoint, user.OrgName, user.DeptName)
+
+	// Check if directory exists
+	stat := syscall.Stat_t{}
+	err := syscall.Stat(fullpath, &stat)
+	if err != nil {
+		return "", err
+	}
+
+	return relativePath(fullpath), nil
 }
 
 func (s FuseServer) Auth(ctx context.Context, req *proto.AuthRequest) (*proto.AuthResponse, error) {
@@ -49,35 +81,6 @@ func (s FuseServer) Auth(ctx context.Context, req *proto.AuthRequest) (*proto.Au
 	}, nil
 }
 
-// Gets the logged in user's root directory
-//
-//	returns:
-//		string: path they are allowed access to
-//		error: if access is denied
-func (s FuseServer) getUsersBaseDir(ctx context.Context) (string, error) {
-	user, ok := ctx.Value(userCtxKey).(*db.User)
-	if !ok {
-		// Usr is NOT logged in
-		// The system should never reach this state as we are relying on the
-		// auth interceptor to filter unauthenticated gRPC requests
-		log.Println("[ERROR] User not logged in")
-		return "", status.Error(codes.FailedPrecondition, "User not logged in")
-	}
-
-	baseDir := filepath.Join(s.path, user.OrgName, user.DeptName)
-
-	// Check if directory exists
-	stat := syscall.Stat_t{}
-	err := syscall.Stat(baseDir, &stat)
-	if err != nil {
-		relativePath := s.relativePath(baseDir)
-		log.Printf("[ERROR] User's base directory \"%v\" NOT found\n", relativePath)
-		return "", status.Errorf(codes.NotFound, "User's base directory \"%v\" NOT found", relativePath)
-	}
-
-	return baseDir, nil
-}
-
 func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) (*emptypb.Empty, error) {
 	log.Printf("[GRPC] CreateOrg %v[%v]\n", req.OrgName, req.DeptName)
 	isEmpty := func(value string) bool {
@@ -92,7 +95,7 @@ func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) 
 	baseDir := filepath.Join(s.path, req.OrgName)
 	err := os.MkdirAll(baseDir, 0751)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
 	if !isEmpty(req.DeptName) {
@@ -100,7 +103,7 @@ func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) 
 		deptDir := filepath.Join(baseDir, req.DeptName)
 		err := os.MkdirAll(deptDir, 0771)
 		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
+			return nil, parsegRPCError(err)
 		}
 	}
 
@@ -133,33 +136,18 @@ func (s FuseServer) CreateUser(ctx context.Context, req *proto.CreateUserRequest
 }
 
 func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerStreamingServer[proto.FileChunk]) error {
-	log.Printf("[GRPC] DownloadFile \"%v\"\n", req.Path)
+	// log.Printf("[GRPC] DownloadFile \"%v\"\n", req.Path)
 
-	baseDir, err := s.getUsersBaseDir(stream.Context())
+	ctx := stream.Context()
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return err
+		return parsegRPCError(err)
 	}
 
-	path := filepath.Join(baseDir, req.Path)
-	stat := syscall.Stat_t{}
-	err = syscall.Stat(path, &stat)
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	file, err := os.Open(fullpath)
 	if err != nil {
-		errCode := codes.Internal
-		if err == syscall.ENOENT {
-			errCode = codes.NotFound
-		}
-		return status.Error(errCode, err.Error())
-	}
-
-	mode := os.FileMode(stat.Mode)
-	if mode.IsDir() {
-		// Cannot download a directory
-		return status.Error(codes.InvalidArgument, "path is a directory")
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return status.Error(codes.Internal, err.Error())
+		return parsegRPCError(err)
 	}
 	defer file.Close()
 
@@ -167,7 +155,7 @@ func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerS
 	hash := md5.New()
 	_, err = io.Copy(hash, file)
 	if err != nil {
-		return status.Error(codes.Internal, err.Error())
+		return parsegRPCError(err)
 	}
 	digest := hash.Sum(nil)
 	fileHash := hex.EncodeToString(digest)
@@ -180,90 +168,145 @@ func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerS
 	// read
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
-		return status.Error(codes.Internal, err.Error())
+		return parsegRPCError(err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		return parsegRPCError(err)
 	}
 
 	buff := make([]byte, 64*1024) // 64Kb
 	sentBytes := 0
 
+outer:
 	for {
-		n, err := file.Read(buff)
-		if err != nil {
-			if err == io.EOF {
-				break
+		select {
+		case <-ctx.Done():
+			// Client closed connection
+			break outer
+
+		default:
+			n, err := file.Read(buff)
+			if err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return parsegRPCError(err)
 			}
-			return status.Error(codes.Internal, err.Error())
-		}
 
-		chunk := proto.FileChunk{
-			Data:      buff[:n],
-			Offset:    int64(sentBytes),
-			TotalSize: stat.Size,
-		}
-		err = stream.Send(&chunk)
-		if err != nil {
-			return status.Error(codes.Internal, err.Error())
-		}
+			chunk := proto.FileChunk{
+				Data:      buff[:n],
+				Offset:    int64(sentBytes),
+				TotalSize: info.Size(),
+			}
+			err = stream.Send(&chunk)
+			if err != nil {
+				return parsegRPCError(err)
+			}
 
-		sentBytes += n
+			sentBytes += n
+		}
 	}
 
 	log.Printf("[DEBUG] Sent %v bytes over network\n", sentBytes)
 	return nil
 }
 
-// FUSE functions
-
-func (s FuseServer) Attr(ctx context.Context, req *proto.Node) (*proto.FileAttr, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) ObserveFileChanges(_ *emptypb.Empty, stream grpc.ServerStreamingServer[proto.FileEvent]) error {
+	ctx := stream.Context()
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return parsegRPCError(err)
 	}
 
-	path := filepath.Join(baseDir, req.Path)
-	// log.Printf("[GRPC] Attr \"%v\"\n", s.relativePath(path))
+	log.Printf("[GRPC] Client observing MAIN_OBSERVER@%v\n", usersDir)
+	clientChan := make(chan *proto.FileEvent, 10)
+
+	// Add user as an observer
+	mu.Lock()
+	observers[usersDir] = append(observers[usersDir], clientChan)
+	mu.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Client closed connection
+			log.Printf("[GRPC] Client stopped observing MAIN_OBSERVER@%v; %v\n", usersDir, ctx.Err())
+			return nil
+
+		case fileEvent := <-clientChan:
+			log.Printf("[GRPC] Sending file event %s to client\n", fileEvent)
+
+			// Trim usersDir from response; our clients do NOT care
+			// how the directories are structured on the backend
+			trimmedPath := strings.TrimPrefix(fileEvent.Path, usersDir)
+			fileEvent.Path = trimmedPath
+
+			trimmedPath = strings.TrimPrefix(fileEvent.NewPath, usersDir)
+			fileEvent.NewPath = trimmedPath
+
+			err := stream.Send(fileEvent)
+			if err != nil {
+				return parsegRPCError(err)
+			}
+		}
+	}
+}
+
+// FUSE functions
+
+func (s FuseServer) Attr(ctx context.Context, req *proto.DirEntry) (*proto.FileAttr, error) {
+	usersDir, err := getUsersDir(ctx)
+	if err != nil {
+		return nil, parsegRPCError(err)
+	}
+
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	// log.Printf("[GRPC] Attr \"%v\"\n", relativePath(fullpath))
 
 	stat := syscall.Stat_t{}
-	err = syscall.Lstat(path, &stat)
+	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	return lib.StatToFileAttr(&stat), nil
 }
 
-func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*proto.Node, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*proto.DirEntry, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] Lookup \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Lookup \"%v\"\n", relativePath(fullpath))
 
-	info, err := os.Stat(path)
+	stat := syscall.Stat_t{}
+	err = syscall.Stat(fullpath, &stat)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
-	attr := lib.FileInfoToFileAttr(info)
-	return &proto.Node{
+
+	return &proto.DirEntry{
 		Path: req.Path,
-		Attr: attr,
+		Attr: lib.StatToFileAttr(&stat),
 	}, nil
 }
 
-func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.Node) (*proto.ReadDirAllResponse, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.DirEntry) (*proto.ReadDirAllResponse, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] ReadDirAll \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	// log.Printf("[GRPC] ReadDirAll \"%v\"\n", relativePath(fullpath))
 
-	files, err := os.ReadDir(path)
+	files, err := os.ReadDir(fullpath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
-	entries := []*proto.Dirent{}
+	entries := []*proto.DirEntry{}
 	for _, file := range files {
 		filePath := filepath.Join(req.Path, file.Name())
 
@@ -273,10 +316,10 @@ func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.Node) (*proto.Rea
 		}
 
 		attr := lib.FileInfoToFileAttr(info)
-		entries = append(entries, &proto.Dirent{
-			Inode: attr.Inode,
-			Path:  filePath,
-			Mode:  uint32(info.Mode()),
+		entries = append(entries, &proto.DirEntry{
+			Ino:  attr.Ino,
+			Path: filePath,
+			Mode: uint32(info.Mode()),
 		})
 	}
 	return &proto.ReadDirAllResponse{
@@ -284,115 +327,113 @@ func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.Node) (*proto.Rea
 	}, nil
 }
 
-func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.Node, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.DirEntry, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] Mkdir \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Mkdir \"%v\"\n", relativePath(fullpath))
 
-	err = os.Mkdir(path, os.FileMode(req.Mode))
+	err = os.Mkdir(fullpath, os.FileMode(req.Mode))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
+	// Confirm directory was created
 	stat := syscall.Stat_t{}
-	err = syscall.Lstat(path, &stat)
+	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		os.Remove(path)
-		return nil, status.Errorf(codes.Internal, err.Error())
+		os.Remove(fullpath)
+		return nil, parsegRPCError(err)
 	}
-	return &proto.Node{
+
+	return &proto.DirEntry{
 		Path: req.Path,
 		Attr: lib.StatToFileAttr(&stat),
 	}, nil
 }
 
-func (s FuseServer) Rmdir(ctx context.Context, req *proto.Node) (*emptypb.Empty, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) Rmdir(ctx context.Context, req *proto.DirEntry) (*emptypb.Empty, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] Rmdir \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Rmdir \"%v\"\n", relativePath(fullpath))
 
-	err = os.Remove(path)
+	err = os.Remove(fullpath)
 	if err != nil {
-		code := codes.Internal
-		if os.IsNotExist(err) {
-			code = codes.NotFound
-		}
-		return nil, status.Errorf(code, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	return &emptypb.Empty{}, nil
 }
 
-func (s FuseServer) Getattr(ctx context.Context, req *proto.Node) (*proto.FileAttr, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) Getattr(ctx context.Context, req *proto.DirEntry) (*proto.FileAttr, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] Getattr \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Getattr \"%v\"\n", relativePath(fullpath))
 
 	stat := syscall.Stat_t{}
-	err = syscall.Lstat(path, &stat)
+	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	return lib.StatToFileAttr(&stat), nil
 }
 
 func (s FuseServer) Create(ctx context.Context, req *proto.CreateRequest) (*proto.CreateResponse, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] Create \"%v\"\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Create \"%v\"\n", relativePath(fullpath))
 
-	file, err := os.OpenFile(path, int(req.Flags), os.FileMode(req.Mode))
+	file, err := os.OpenFile(fullpath, int(req.Flags), os.FileMode(req.Mode))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	attr := lib.FileInfoToFileAttr(info)
 	return &proto.CreateResponse{
-		NodeId: attr.Inode,
+		NodeId: attr.Ino,
 		Attr:   attr,
 	}, nil
 }
 
 func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto.LinkResponse, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
 
-	oldpath := filepath.Join(baseDir, req.OldPath)
-	newpath := filepath.Join(baseDir, req.NewPath)
-	log.Printf("[GRPC] Symlink %v -> %v\n", s.relativePath(oldpath), s.relativePath(newpath))
+	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
+	newpath := filepath.Join(s.path, usersDir, req.NewPath)
+	log.Printf("[GRPC] Symlink %v -> %v\n", relativePath(oldpath), relativePath(newpath))
 
 	err = syscall.Symlink(oldpath, newpath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
 	// Stat new path
 	stat := syscall.Stat_t{}
 	err = syscall.Lstat(newpath, &stat)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
 	return &proto.LinkResponse{
-		Node: &proto.Node{
+		Node: &proto.DirEntry{
 			Path: req.NewPath,
 			Attr: lib.StatToFileAttr(&stat),
 		},
@@ -400,68 +441,120 @@ func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto
 }
 
 func (s FuseServer) Link(ctx context.Context, req *proto.LinkRequest) (*proto.LinkResponse, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
 
-	oldpath := filepath.Join(baseDir, req.OldPath)
-	newpath := filepath.Join(baseDir, req.NewPath)
-	log.Printf("[GRPC] Link %v -> %v\n", s.relativePath(oldpath), s.relativePath(newpath))
+	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
+	newpath := filepath.Join(s.path, usersDir, req.NewPath)
+	log.Printf("[GRPC] Link %v -> %v\n", relativePath(oldpath), relativePath(newpath))
 
 	err = syscall.Link(oldpath, newpath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
 	// Stat new path
 	stat := syscall.Stat_t{}
 	err = syscall.Stat(newpath, &stat)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 
 	return &proto.LinkResponse{
-		Node: &proto.Node{
+		Node: &proto.DirEntry{
 			Path: req.NewPath,
 			Attr: lib.StatToFileAttr(&stat),
 		},
 	}, nil
 }
 
-func (s FuseServer) ReadAll(ctx context.Context, req *proto.Node) (*proto.ReadAllResponse, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+func (s FuseServer) ReadAll(ctx context.Context, req *proto.DirEntry) (*proto.ReadAllResponse, error) {
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
 
-	path := filepath.Join(baseDir, req.Path)
-	log.Printf("[GRPC] ReadAll %v\n", s.relativePath(path))
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] ReadAll %v\n", relativePath(fullpath))
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(fullpath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	return &proto.ReadAllResponse{Data: data}, nil
 }
 
-func (FuseServer) Write(context.Context, *proto.WriteRequest) (*proto.WriteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Write not implemented")
+func (s FuseServer) Write(ctx context.Context, req *proto.WriteRequest) (*proto.WriteResponse, error) {
+	usersDir, err := getUsersDir(ctx)
+	if err != nil {
+		return nil, parsegRPCError(err)
+	}
+
+	fullpath := filepath.Join(s.path, usersDir, req.Path)
+	log.Printf("[GRPC] Write %v bytes of data to file %v\n", len(req.Data), req.Path)
+
+	file, err := os.OpenFile(fullpath, os.O_WRONLY, 0755)
+	if err != nil {
+		return nil, parsegRPCError(err)
+	}
+	defer file.Close()
+
+	n, err := file.WriteAt(req.Data, req.Offset)
+	if err != nil {
+		return nil, parsegRPCError(err)
+	}
+
+	return &proto.WriteResponse{
+		BytesWritten: uint64(n),
+	}, nil
 }
 
 func (s FuseServer) Rename(ctx context.Context, req *proto.RenameRequest) (*emptypb.Empty, error) {
-	baseDir, err := s.getUsersBaseDir(ctx)
+	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, err
+		return nil, parsegRPCError(err)
 	}
 
-	oldpath := filepath.Join(baseDir, req.OldPath)
-	newpath := filepath.Join(baseDir, req.NewPath)
-	log.Printf("[GRPC] Rename %v -> %v\n", s.relativePath(oldpath), s.relativePath(newpath))
+	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
+	newpath := filepath.Join(s.path, usersDir, req.NewPath)
+	log.Printf("[GRPC] Rename %v -> %v\n", relativePath(oldpath), relativePath(newpath))
 
 	err = syscall.Rename(oldpath, newpath)
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, parsegRPCError(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func parsegRPCError(err error) error {
+	switch {
+	case os.IsNotExist(err):
+		return status.Error(codes.NotFound, err.Error())
+
+	case os.IsPermission(err):
+		return status.Error(codes.PermissionDenied, err.Error())
+
+	case os.IsTimeout(err):
+		return status.Error(codes.DeadlineExceeded, err.Error())
+
+	case os.IsExist(err):
+		return status.Error(codes.AlreadyExists, err.Error())
+
+	case err == syscall.EIO:
+		// I/O error, often indicates a physical disk failure
+		return status.Errorf(codes.Internal, "I/O error: %v", err)
+
+	case err == syscall.ENOSPC:
+		// No space left on device
+		return status.Errorf(codes.ResourceExhausted, "no space left on device: %v", err)
+
+	case err == syscall.EINVAL:
+		// Invalid argument to a syscall
+		return status.Errorf(codes.InvalidArgument, "invalid system call argument: %v", err)
+
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
 }
