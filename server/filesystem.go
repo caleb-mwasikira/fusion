@@ -93,11 +93,11 @@ func (n *Node) OnAdd(ctx context.Context) {
 }
 
 func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
-	// log.Printf("Statfs %v\n", n.path)
+	log.Printf("[FUSE] Statfs %v\n", n.path)
 	stat := syscall.Statfs_t{}
 	err := syscall.Statfs(n.path, &stat)
 	if err != nil {
-		// log.Printf("Stafs %v failed; %v\n", n.path, err)
+		log.Printf("[FUSE] Stafs %v failed; %v\n", n.path, err)
 		return fs.ToErrno(err)
 	}
 	out.FromStatfsT(&stat)
@@ -106,12 +106,12 @@ func (n *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 
 func (n *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullpath := filepath.Join(n.path, name)
-	// log.Printf("Lookup %v\n", n.relativePath(fullpath))
+	// log.Printf("[FUSE] Lookup %v\n", relativePath(fullpath))
 
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		// log.Printf("Lookup %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Lookup %v failed; %v\n", relativePath(fullpath), err)
 		return nil, fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -132,11 +132,11 @@ func (n *Node) Mkdir(ctx context.Context, name string, _mode uint32, out *fuse.E
 	fullpath := filepath.Join(n.path, name)
 	mode := os.FileMode(_mode) | os.ModeDir
 
-	// log.Printf("Mkdir; %v\n", n.relativePath(fullpath))
+	log.Printf("[FUSE] Mkdir; %v\n", relativePath(fullpath))
 
 	err := os.Mkdir(fullpath, mode)
 	if err != nil {
-		// log.Printf("Mkdir %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Mkdir %v failed; %v\n", relativePath(fullpath), err)
 		return nil, fs.ToErrno(err)
 	}
 
@@ -144,7 +144,7 @@ func (n *Node) Mkdir(ctx context.Context, name string, _mode uint32, out *fuse.E
 	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
 		syscall.Rmdir(fullpath)
-		// log.Printf("Mkdir %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Mkdir %v failed; %v\n", relativePath(fullpath), err)
 		return nil, fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -168,7 +168,7 @@ func (n *Node) Mkdir(ctx context.Context, name string, _mode uint32, out *fuse.E
 
 func (n *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 	fullpath := filepath.Join(n.path, name)
-	// log.Printf("Rmdir %v\n", n.relativePath(fullpath))
+	log.Printf("[FUSE] Rmdir %v\n", relativePath(fullpath))
 
 	err := syscall.Rmdir(fullpath)
 	if err != nil {
@@ -186,7 +186,7 @@ func (n *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 func (n *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	fullpath := filepath.Join(n.path, name)
-	// log.Printf("Unlink %v\n", n.relativePath(fullpath))
+	log.Printf("[FUSE] Unlink %v\n", relativePath(fullpath))
 	err := syscall.Unlink(fullpath)
 	if err != nil {
 		return fs.ToErrno(err)
@@ -203,17 +203,27 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 
 	oldpath := filepath.Join(n.path, oldName)
 	newpath := filepath.Join(newNode.path, newName)
-	// log.Printf("Rename %v -> %v\n", oldpath, newpath)
+	log.Printf("[FUSE] Rename %v -> %v\n", oldpath, newpath)
+
+	newParentDir := filepath.Dir(newpath)
+	if _, err := os.Stat(newParentDir); os.IsNotExist(err) {
+		log.Printf("[FUSE] Target directory '%s' does not exist. Creating it.\n", newParentDir)
+		err := os.MkdirAll(newParentDir, 0755)
+		if err != nil {
+			log.Printf("[FUSE] Failed to create target directory: %v\n", err)
+			return fs.ToErrno(err)
+		}
+	}
+
 	err := os.Rename(oldpath, newpath)
 	if err != nil {
-		// log.Printf("Rename %v -> %v failed; %v\n", oldpath, newpath, err)
+		log.Printf("[FUSE] Rename %v -> %v failed; %v\n", oldpath, newpath, err)
 		return fs.ToErrno(err)
 	}
 
 	// Remove old entry from parent
 	oldChild := n.GetChild(oldName)
 	if oldChild != nil {
-		n.MvChild(oldName, &newNode.Inode, newName, false)
 		go func() {
 			n.NotifyDelete(oldName, oldChild)
 
@@ -225,7 +235,7 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 	var stat syscall.Stat_t
 	err = syscall.Lstat(newpath, &stat)
 	if err != nil {
-		// log.Printf("Rename %v -> %v failed; %v\n", oldpath, newpath, err)
+		log.Printf("[FUSE] Rename %v -> %v failed; %v\n", oldpath, newpath, err)
 		return fs.ToErrno(err)
 	}
 
@@ -249,18 +259,18 @@ func (n *Node) Rename(ctx context.Context, oldName string, newParent fs.InodeEmb
 
 func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	fullpath := filepath.Join(n.path, name)
-	log.Printf("Create %v\n", relativePath(fullpath))
+	log.Printf("[FUSE] Create %v\n", relativePath(fullpath))
 
 	file, err := os.OpenFile(fullpath, int(flags), 0755)
 	if err != nil {
-		// log.Printf("Create %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Create %v failed; %v\n", relativePath(fullpath), err)
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
 	stat := syscall.Stat_t{}
 	err = syscall.Fstat(int(file.Fd()), &stat)
 	if err != nil {
-		// log.Printf("Create %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Create %v failed; %v\n", relativePath(fullpath), err)
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 	out.FromStat(&stat)
@@ -289,11 +299,11 @@ func (n *Node) Create(ctx context.Context, name string, flags uint32, mode uint3
 
 func (n *Node) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullpath := filepath.Join(n.path, name)
-	// log.Printf("Symlink; %v\n", n.relativePath(fullpath))
+	log.Printf("[FUSE] Symlink; %v\n", relativePath(fullpath))
 
 	err := syscall.Symlink(target, relativePath(fullpath))
 	if err != nil {
-		// log.Printf("Symlink %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Symlink %v failed; %v\n", relativePath(fullpath), err)
 		return nil, fs.ToErrno(err)
 	}
 
@@ -301,7 +311,7 @@ func (n *Node) Symlink(ctx context.Context, target, name string, out *fuse.Entry
 	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
 		syscall.Unlink(fullpath)
-		// log.Printf("Symlink %v failed; %v\n", n.relativePath(fullpath), err)
+		log.Printf("[FUSE] Symlink %v failed; %v\n", relativePath(fullpath), err)
 		return nil, fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -327,10 +337,10 @@ func (n *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 
 	oldpath := filepath.Join(n.path, targetNode.path)
 	newpath := filepath.Join(n.path, name)
-	// log.Printf("Link %v -> %v\n", oldpath, newpath)
+	log.Printf("[FUSE] Link %v -> %v\n", oldpath, newpath)
 	err := syscall.Link(oldpath, newpath)
 	if err != nil {
-		// log.Printf("Link %v -> %v failed; %v\n", oldpath, newpath, err)
+		log.Printf("[FUSE] Link %v -> %v failed; %v\n", oldpath, newpath, err)
 		return nil, fs.ToErrno(err)
 	}
 
@@ -338,7 +348,7 @@ func (n *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 	err = syscall.Lstat(oldpath, &stat)
 	if err != nil {
 		syscall.Unlink(oldpath)
-		// log.Printf("Link %v -> %v failed; %v\n", oldpath, newpath, err)
+		log.Printf("[FUSE] Link %v -> %v failed; %v\n", oldpath, newpath, err)
 		return nil, fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -373,17 +383,17 @@ func (n *Node) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 }
 
 func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// log.Printf("Open %v\n", n.path)
+	log.Printf("[FUSE] Open %v\n", n.path)
 	file, err := os.OpenFile(n.path, int(flags), 0755)
 	if err != nil {
-		// log.Printf("Open %v failed; %v\n", n.path, err)
+		log.Printf("[FUSE] Open %v failed; %v\n", n.path, err)
 		return nil, 0, fs.ToErrno(err)
 	}
 
 	stat := syscall.Stat_t{}
 	err = syscall.Lstat(n.path, &stat)
 	if err != nil {
-		// log.Printf("Open %v failed; %v\n", n.path, err)
+		log.Printf("[FUSE] Open %v failed; %v\n", n.path, err)
 		return nil, 0, fs.ToErrno(err)
 	}
 
@@ -407,18 +417,19 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 }
 
 func (n *Node) OpendirHandle(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// log.Printf("OpendirHandle %v\n", n.path)
+	// log.Printf("[FUSE] OpendirHandle %v\n", n.path)
 
 	ds, errno := fs.NewLoopbackDirStream(n.path)
 	if errno != 0 {
-		// log.Printf("OpendirHandle %v failed; %v\n", n.path, errno)
+		log.Printf("[FUSE] OpendirHandle %v failed; %v\n", n.path, errno)
 		return nil, 0, errno
 	}
 	return ds, 0, errno
 }
 
 func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// log.Printf("Readdir %v\n", n.path)
+	// log.Printf("[FUSE] Readdir %v\n", n.path)
+
 	entries := []fuse.DirEntry{}
 	files, err := os.ReadDir(n.path)
 	if err != nil {
@@ -447,12 +458,12 @@ func (n *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	// log.Printf("Getattr %v\n", n.path)
+	// log.Printf("[FUSE] Getattr %v\n", n.path)
 
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(n.path, &stat)
 	if err != nil {
-		// log.Printf("Getattr %v failed; %v\n", n.path, err)
+		log.Printf("[FUSE] Getattr %v failed; %v\n", n.path, err)
 		return fs.ToErrno(err)
 	}
 	out.Attr.FromStat(&stat)
@@ -461,12 +472,12 @@ func (n *Node) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 
 func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	fullpath := n.path
-	// log.Printf("Setattr %v\n", n.path)
+	log.Printf("[FUSE] Setattr %v\n", n.path)
 	mode, ok := in.GetMode()
 	if ok {
 		err := syscall.Chmod(fullpath, mode)
 		if err != nil {
-			// log.Printf("Setattr %v failed; %v\n", n.path, err)
+			log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
@@ -486,7 +497,7 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 
 		err := syscall.Chown(fullpath, suid, sgid)
 		if err != nil {
-			// log.Printf("Setattr %v failed; %v\n", n.path, err)
+			log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
@@ -502,14 +513,14 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 		if accessOK {
 			accessTimestamp, err = unix.TimeToTimespec(accessTime)
 			if err != nil {
-				// log.Printf("Setattr %v failed; %v\n", n.path, err)
+				log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 				return fs.ToErrno(err)
 			}
 		}
 		if modifiedOK {
 			modifiedTimestamp, err = unix.TimeToTimespec(modifiedTime)
 			if err != nil {
-				// log.Printf("Setattr %v failed; %v\n", n.path, err)
+				log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 				return fs.ToErrno(err)
 			}
 		}
@@ -520,7 +531,7 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 		}
 		err = unix.UtimesNanoAt(unix.AT_FDCWD, fullpath, timestamp, unix.AT_SYMLINK_NOFOLLOW)
 		if err != nil {
-			// log.Printf("Setattr %v failed; %v\n", n.path, err)
+			log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
@@ -529,7 +540,7 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 	if ok {
 		err := syscall.Truncate(fullpath, int64(size))
 		if err != nil {
-			// log.Printf("Setattr %v failed; %v\n", n.path, err)
+			log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 			return fs.ToErrno(err)
 		}
 	}
@@ -537,7 +548,7 @@ func (n *Node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn
 	stat := syscall.Stat_t{}
 	err := syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		// log.Printf("Setattr %v failed; %v\n", n.path, err)
+		log.Printf("[FUSE] Setattr %v failed; %v\n", n.path, err)
 		return fs.ToErrno(err)
 	}
 	out.FromStat(&stat)

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/caleb-mwasikira/fusion/lib/events"
 	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -104,4 +105,22 @@ func FileAttrToFuseAttr(attr *proto.FileAttr) fuse.Attr {
 		},
 		Blksize: attr.BlockSize,
 	}
+}
+
+func PrintFileEvent(fileEvent *proto.FileEvent) string {
+	var eventType string
+
+	switch events.EventType(fileEvent.Event) {
+	case events.ADD_FILE:
+		eventType = "ADD_FILE"
+	case events.MODIFY_FILE:
+		eventType = "MODIFY_FILE"
+	case events.RENAME_FILE:
+		eventType = "RENAME_FILE"
+	case events.DELETE_FILE:
+		eventType = "DELETE_FILE"
+	default:
+		eventType = "UNKNOWN"
+	}
+	return fmt.Sprintf("event=%v, path=%v, newpath=%v", eventType, fileEvent.Path, fileEvent.NewPath)
 }

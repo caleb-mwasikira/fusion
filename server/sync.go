@@ -4,9 +4,11 @@ import (
 	"context"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/lib/events"
 	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,23 +44,23 @@ func getObservers(path string) []chan *proto.FileEvent {
 // and forwards them to the observers.
 // Should be run as a goroutine
 func startMainObserver(ctx context.Context) {
-	log.Println("Launching MAIN_OBSERVER goroutine")
+	log.Println("[SYNC] Launching MAIN_OBSERVER goroutine")
 
 	for {
 		fileEvent := <-broadcast
 
-		log.Printf("MAIN_OBSERVER received file event %v\n", fileEvent)
+		log.Printf("[SYNC] MAIN_OBSERVER received file event %v\n", fileEvent)
 
 		clients := getObservers(fileEvent.Path)
 		if len(clients) == 0 {
-			log.Println("No clients observing file events from MAIN_OBSERVER")
+			log.Println("[SYNC] No clients observing file events from MAIN_OBSERVER")
 			continue
 		}
 
 		for _, client := range clients {
 			select {
 			case <-ctx.Done():
-				log.Printf("Exiting MAIN_OBSERVER goroutine; %v\n", ctx.Err())
+				log.Printf("[SYNC] Exiting MAIN_OBSERVER goroutine; %v\n", ctx.Err())
 				return
 
 			default:
@@ -77,6 +79,16 @@ func notifyObservers(event events.EventType, path string, newpath string, mode o
 	path = relativePath(path)
 	newpath = relativePath(newpath)
 
+	// We are not going to send notifications for created temporary files
+	isTempFile := func(filename string) bool {
+		return strings.HasPrefix(filename, ".")
+	}
+
+	if isTempFile(filepath.Base(path)) || isTempFile(filepath.Base(newpath)) {
+		log.Printf("[SYNC] Not sending notifications for actions on temp files; %v or %v\n", path, newpath)
+		return
+	}
+
 	fileEvent := &proto.FileEvent{
 		Event:     uint32(event),
 		Path:      path,
@@ -85,6 +97,6 @@ func notifyObservers(event events.EventType, path string, newpath string, mode o
 		Timestamp: timestamppb.Now(),
 	}
 
-	log.Printf("Broadcast file event %v -> MAIN_OBSERVER\n", fileEvent)
+	log.Printf("[SYNC] Broadcast file event %v -> MAIN_OBSERVER\n", lib.PrintFileEvent(fileEvent))
 	broadcast <- fileEvent
 }

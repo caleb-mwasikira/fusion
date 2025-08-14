@@ -95,7 +95,7 @@ func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) 
 	baseDir := filepath.Join(s.path, req.OrgName)
 	err := os.MkdirAll(baseDir, 0751)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	if !isEmpty(req.DeptName) {
@@ -103,7 +103,7 @@ func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) 
 		deptDir := filepath.Join(baseDir, req.DeptName)
 		err := os.MkdirAll(deptDir, 0771)
 		if err != nil {
-			return nil, parsegRPCError(err)
+			return nil, grpcError(err)
 		}
 	}
 
@@ -141,13 +141,13 @@ func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerS
 	ctx := stream.Context()
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	file, err := os.Open(fullpath)
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 	defer file.Close()
 
@@ -155,7 +155,7 @@ func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerS
 	hash := md5.New()
 	_, err = io.Copy(hash, file)
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 	digest := hash.Sum(nil)
 	fileHash := hex.EncodeToString(digest)
@@ -168,12 +168,12 @@ func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerS
 	// read
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 
 	info, err := file.Stat()
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 
 	buff := make([]byte, 64*1024) // 64Kb
@@ -192,7 +192,7 @@ outer:
 				if err == io.EOF {
 					return nil
 				}
-				return parsegRPCError(err)
+				return grpcError(err)
 			}
 
 			chunk := proto.FileChunk{
@@ -202,14 +202,13 @@ outer:
 			}
 			err = stream.Send(&chunk)
 			if err != nil {
-				return parsegRPCError(err)
+				return grpcError(err)
 			}
 
 			sentBytes += n
 		}
 	}
 
-	log.Printf("[DEBUG] Sent %v bytes over network\n", sentBytes)
 	return nil
 }
 
@@ -217,7 +216,7 @@ func (s FuseServer) ObserveFileChanges(_ *emptypb.Empty, stream grpc.ServerStrea
 	ctx := stream.Context()
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return parsegRPCError(err)
+		return grpcError(err)
 	}
 
 	log.Printf("[GRPC] Client observing MAIN_OBSERVER@%v\n", usersDir)
@@ -248,7 +247,7 @@ func (s FuseServer) ObserveFileChanges(_ *emptypb.Empty, stream grpc.ServerStrea
 
 			err := stream.Send(fileEvent)
 			if err != nil {
-				return parsegRPCError(err)
+				return grpcError(err)
 			}
 		}
 	}
@@ -259,7 +258,7 @@ func (s FuseServer) ObserveFileChanges(_ *emptypb.Empty, stream grpc.ServerStrea
 func (s FuseServer) Attr(ctx context.Context, req *proto.DirEntry) (*proto.FileAttr, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
@@ -268,7 +267,7 @@ func (s FuseServer) Attr(ctx context.Context, req *proto.DirEntry) (*proto.FileA
 	stat := syscall.Stat_t{}
 	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	return lib.StatToFileAttr(&stat), nil
 }
@@ -276,7 +275,7 @@ func (s FuseServer) Attr(ctx context.Context, req *proto.DirEntry) (*proto.FileA
 func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*proto.DirEntry, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	log.Printf("[GRPC] Lookup \"%v\"\n", relativePath(fullpath))
@@ -284,7 +283,7 @@ func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*prot
 	stat := syscall.Stat_t{}
 	err = syscall.Stat(fullpath, &stat)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	return &proto.DirEntry{
@@ -296,14 +295,14 @@ func (s FuseServer) Lookup(ctx context.Context, req *proto.LookupRequest) (*prot
 func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.DirEntry) (*proto.ReadDirAllResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	// log.Printf("[GRPC] ReadDirAll \"%v\"\n", relativePath(fullpath))
 
 	files, err := os.ReadDir(fullpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	entries := []*proto.DirEntry{}
@@ -330,14 +329,14 @@ func (s FuseServer) ReadDirAll(ctx context.Context, req *proto.DirEntry) (*proto
 func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.DirEntry, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	log.Printf("[GRPC] Mkdir \"%v\"\n", relativePath(fullpath))
 
 	err = os.Mkdir(fullpath, os.FileMode(req.Mode))
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	// Confirm directory was created
@@ -345,7 +344,7 @@ func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.
 	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
 		os.Remove(fullpath)
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	return &proto.DirEntry{
@@ -357,14 +356,14 @@ func (s FuseServer) Mkdir(ctx context.Context, req *proto.MkdirRequest) (*proto.
 func (s FuseServer) Rmdir(ctx context.Context, req *proto.DirEntry) (*emptypb.Empty, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	log.Printf("[GRPC] Rmdir \"%v\"\n", relativePath(fullpath))
 
 	err = os.Remove(fullpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -372,7 +371,7 @@ func (s FuseServer) Rmdir(ctx context.Context, req *proto.DirEntry) (*emptypb.Em
 func (s FuseServer) Getattr(ctx context.Context, req *proto.DirEntry) (*proto.FileAttr, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	log.Printf("[GRPC] Getattr \"%v\"\n", relativePath(fullpath))
@@ -380,7 +379,7 @@ func (s FuseServer) Getattr(ctx context.Context, req *proto.DirEntry) (*proto.Fi
 	stat := syscall.Stat_t{}
 	err = syscall.Lstat(fullpath, &stat)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	return lib.StatToFileAttr(&stat), nil
 }
@@ -388,20 +387,20 @@ func (s FuseServer) Getattr(ctx context.Context, req *proto.DirEntry) (*proto.Fi
 func (s FuseServer) Create(ctx context.Context, req *proto.CreateRequest) (*proto.CreateResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
 	log.Printf("[GRPC] Create \"%v\"\n", relativePath(fullpath))
 
 	file, err := os.OpenFile(fullpath, int(req.Flags), os.FileMode(req.Mode))
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	attr := lib.FileInfoToFileAttr(info)
 	return &proto.CreateResponse{
@@ -413,7 +412,7 @@ func (s FuseServer) Create(ctx context.Context, req *proto.CreateRequest) (*prot
 func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto.LinkResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
@@ -422,14 +421,14 @@ func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto
 
 	err = syscall.Symlink(oldpath, newpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	// Stat new path
 	stat := syscall.Stat_t{}
 	err = syscall.Lstat(newpath, &stat)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	return &proto.LinkResponse{
@@ -443,7 +442,7 @@ func (s FuseServer) Symlink(ctx context.Context, req *proto.LinkRequest) (*proto
 func (s FuseServer) Link(ctx context.Context, req *proto.LinkRequest) (*proto.LinkResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
@@ -452,14 +451,14 @@ func (s FuseServer) Link(ctx context.Context, req *proto.LinkRequest) (*proto.Li
 
 	err = syscall.Link(oldpath, newpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	// Stat new path
 	stat := syscall.Stat_t{}
 	err = syscall.Stat(newpath, &stat)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	return &proto.LinkResponse{
@@ -473,7 +472,7 @@ func (s FuseServer) Link(ctx context.Context, req *proto.LinkRequest) (*proto.Li
 func (s FuseServer) ReadAll(ctx context.Context, req *proto.DirEntry) (*proto.ReadAllResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
@@ -481,7 +480,7 @@ func (s FuseServer) ReadAll(ctx context.Context, req *proto.DirEntry) (*proto.Re
 
 	data, err := os.ReadFile(fullpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	return &proto.ReadAllResponse{Data: data}, nil
 }
@@ -489,7 +488,7 @@ func (s FuseServer) ReadAll(ctx context.Context, req *proto.DirEntry) (*proto.Re
 func (s FuseServer) Write(ctx context.Context, req *proto.WriteRequest) (*proto.WriteResponse, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	fullpath := filepath.Join(s.path, usersDir, req.Path)
@@ -497,13 +496,13 @@ func (s FuseServer) Write(ctx context.Context, req *proto.WriteRequest) (*proto.
 
 	file, err := os.OpenFile(fullpath, os.O_WRONLY, 0755)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	defer file.Close()
 
 	n, err := file.WriteAt(req.Data, req.Offset)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	return &proto.WriteResponse{
@@ -514,21 +513,32 @@ func (s FuseServer) Write(ctx context.Context, req *proto.WriteRequest) (*proto.
 func (s FuseServer) Rename(ctx context.Context, req *proto.RenameRequest) (*emptypb.Empty, error) {
 	usersDir, err := getUsersDir(ctx)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 
 	oldpath := filepath.Join(s.path, usersDir, req.OldPath)
 	newpath := filepath.Join(s.path, usersDir, req.NewPath)
 	log.Printf("[GRPC] Rename %v -> %v\n", relativePath(oldpath), relativePath(newpath))
 
+	newParentDir := filepath.Dir(newpath)
+	if _, err := os.Stat(newParentDir); os.IsNotExist(err) {
+		log.Printf("[GRPC] Target directory '%s' does not exist. Creating it.\n", newParentDir)
+		err := os.MkdirAll(newParentDir, 0755)
+		if err != nil {
+			log.Printf("[GRPC] Failed to create target directory: %v\n", err)
+			return nil, grpcError(err)
+		}
+	}
+
 	err = syscall.Rename(oldpath, newpath)
 	if err != nil {
-		return nil, parsegRPCError(err)
+		return nil, grpcError(err)
 	}
 	return &emptypb.Empty{}, nil
 }
 
-func parsegRPCError(err error) error {
+// Parse normal error into GRPC error code
+func grpcError(err error) error {
 	switch {
 	case os.IsNotExist(err):
 		return status.Error(codes.NotFound, err.Error())

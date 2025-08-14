@@ -94,7 +94,6 @@ func (f *FileHandle) Flush(ctx context.Context) syscall.Errno {
 	// want to really close the file, we just want to flush. This
 	// is achieved by closing a dup'd fd.
 	newFd, err := syscall.Dup(f.fd)
-
 	if err != nil {
 		return fs.ToErrno(err)
 	}

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/md5"
+	"crypto/x509"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -10,21 +12,57 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/lib/events"
 	"github.com/caleb-mwasikira/fusion/lib/proto"
-	"github.com/hanwen/go-fuse/v2/fuse"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+//go:embed certs/ca.crt
+var CA_CERT_DATA []byte
+
+// Returns an authenticated gRPC client
+func new_gRPC_client() proto.FuseClient {
+	certPool := x509.NewCertPool()
+	ok := certPool.AppendCertsFromPEM(CA_CERT_DATA)
+	if !ok {
+		log.Fatalln("[GRPC] Error loading custom CA cert file")
+	}
+
+	// Setup TLS connection
+	transportCreds := credentials.NewClientTLSFromCert(certPool, "")
+	conn, err := grpc.NewClient(
+		remote,
+		grpc.WithTransportCredentials(transportCreds),
+	)
+	if err != nil {
+		log.Fatalf("[GRPC] Error creating GRPC channel; %v\n", err)
+	}
+
+	return proto.NewFuseClient(conn)
+}
+
+// Embeds authorization key in gRPC request metadata
+func NewAuthenticatedCtx(ctx context.Context) context.Context {
+	md := metadata.New(map[string]string{
+		"authorization": authToken,
+	})
+	return metadata.NewOutgoingContext(ctx, md)
+}
+
 // Opens a stream with remote and listens for file events
 func startRemoteObserver(ctx context.Context) {
-	log.Println("[INFO] Launching REMOTE_OBSERVER goroutine")
+	log.Println("[SYNC] Launching REMOTE_OBSERVER goroutine")
 
 	ctx = NewAuthenticatedCtx(ctx)
 	stream, err := grpcClient.ObserveFileChanges(ctx, &emptypb.Empty{})
 	if err != nil {
-		log.Printf("[ERROR] launching REMOTE_OBSERVER; %v\n", err)
+		log.Printf("[SYNC] Error launching REMOTE_OBSERVER; %v\n", err)
 		return
 	}
 
@@ -32,7 +70,7 @@ outer:
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Exiting REMOTE_OBSERVER goroutine; %v\n", ctx.Err())
+			log.Printf("[SYNC] Exiting REMOTE_OBSERVER goroutine; %v\n", ctx.Err())
 			return
 
 		default:
@@ -40,10 +78,10 @@ outer:
 			if err != nil {
 				if err == io.EOF {
 					// Server terminated stream ??
-					log.Printf("Exiting REMOTE_OBSERVER goroutine; %v\n", err)
+					log.Printf("[SYNC] Exiting REMOTE_OBSERVER goroutine; %v\n", err)
 					break outer
 				}
-				log.Printf("REMOTE_OBSERVER error; %v\n", err)
+				log.Printf("[SYNC] REMOTE_OBSERVER error; %v\n", err)
 				return
 			}
 
@@ -54,18 +92,18 @@ outer:
 }
 
 func handleFileEvent(fileEvent *proto.FileEvent) {
-	log.Printf("REMOTE_OBSERVER received fileEvent: %s\n", fileEvent)
+	log.Printf("[SYNC] REMOTE_OBSERVER received fileEvent: %s\n", lib.PrintFileEvent(fileEvent))
 	eventType := events.EventType(fileEvent.Event)
 
 	switch eventType {
 	case events.ADD_FILE:
 		mode := os.FileMode(fileEvent.Mode)
-		fullpath := filepath.Join(mountpoint, fileEvent.Path)
+		fullpath := filepath.Join(realpath, fileEvent.Path)
 
 		if mode.IsDir() {
 			err := os.MkdirAll(fullpath, mode)
 			if err != nil {
-				log.Printf("Error creating directory; %v\n", err)
+				log.Printf("[SYNC] Error creating directory; %v\n", err)
 			}
 			return
 		}
@@ -73,7 +111,7 @@ func handleFileEvent(fileEvent *proto.FileEvent) {
 		if mode.IsRegular() {
 			file, err := os.OpenFile(fullpath, os.O_CREATE|os.O_RDWR, mode)
 			if err != nil {
-				log.Printf("Error creating file; %v\n", err)
+				log.Printf("[SYNC] Error creating file; %v\n", err)
 				return
 			}
 			file.Close()
@@ -84,36 +122,36 @@ func handleFileEvent(fileEvent *proto.FileEvent) {
 			Path: fileEvent.Path,
 			Mode: fileEvent.Mode,
 		}
-		err := downloadAndSave(&remote)
+		err := downloadFile(&remote)
 		if err != nil {
-			log.Printf("Error downloading file changes; %v\n", err)
+			log.Printf("[SYNC] Error downloading file changes; %v\n", err)
 		}
 
 	case events.RENAME_FILE:
-		oldpath := filepath.Join(mountpoint, fileEvent.Path)
-		newpath := filepath.Join(mountpoint, fileEvent.NewPath)
+		oldpath := filepath.Join(realpath, fileEvent.Path)
+		newpath := filepath.Join(realpath, fileEvent.NewPath)
 
 		err := os.Rename(oldpath, newpath)
 		if err != nil {
-			log.Printf("Error handling RENAME file event; %v\n", err)
+			log.Printf("[SYNC] Error handling RENAME file event; %v\n", err)
 			return
 		}
 
 	case events.DELETE_FILE:
-		path := filepath.Join(mountpoint, fileEvent.Path)
+		path := filepath.Join(realpath, fileEvent.Path)
 		err := os.Remove(path)
 		if err != nil {
-			log.Printf("Error handling DEL file event; %v\n", err)
+			log.Printf("[SYNC] Error handling DELETE file event; %v\n", err)
 		}
 
 	default:
-		log.Println("Unregistered file event")
+		log.Println("[SYNC] Unregistered file event")
 	}
 }
 
-func fetchRemoteEntries(ctx context.Context, path string) ([]fuse.DirEntry, error) {
+func fetchRemoteEntries(ctx context.Context, path string) error {
 	if strings.Contains(path, "Trash") {
-		return []fuse.DirEntry{}, nil
+		return nil
 	}
 
 	// Download directory tree and re-create it
@@ -122,28 +160,45 @@ func fetchRemoteEntries(ctx context.Context, path string) ([]fuse.DirEntry, erro
 		Path: path,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	remoteEntries := response.GetEntries()
-	fuseEntries := []fuse.DirEntry{}
+	wg := sync.WaitGroup{}
 
 	for _, remoteEntry := range remoteEntries {
-		fuseEntries = append(fuseEntries, fuse.DirEntry{
-			Ino:  remoteEntry.Ino,
-			Name: remoteEntry.Path,
-			Mode: remoteEntry.Mode,
-		})
+		mode := os.FileMode(remoteEntry.Mode)
+		fullpath := filepath.Join(realpath, remoteEntry.Path)
+
+		if mode.IsDir() {
+			err := os.MkdirAll(fullpath, 0755)
+			if err != nil {
+				log.Printf("[SYNC] Error creating directory; %v\n", err)
+			}
+		}
+
+		if mode.IsRegular() {
+			wg.Add(1)
+			go func(file *proto.DirEntry) {
+				defer wg.Done()
+				err := downloadFile(file)
+				if err != nil {
+					log.Printf("[SYNC] Error downloading remote file; %v\n", err)
+				}
+			}(remoteEntry)
+		}
 	}
 
-	return fuseEntries, nil
+	wg.Wait()
+
+	return nil
 }
 
-func downloadAndSave(remote *proto.DirEntry) error {
-	// log.Printf("[INFO] Downloading remote file \"%v\"\n", remotePath)
+func downloadFile(remote *proto.DirEntry) error {
+	// log.Printf("[SYNC] Downloading remote file \"%v\"\n", remote.Path)
 
-	fullpath := filepath.Join(mountpoint, remote.Path)
-	file, err := os.OpenFile(fullpath, os.O_RDWR, os.FileMode(remote.Mode))
+	fullpath := filepath.Join(realpath, remote.Path)
+	file, err := os.OpenFile(fullpath, os.O_CREATE|os.O_RDWR, os.FileMode(remote.Mode))
 	if err != nil {
 		return err
 	}
@@ -161,9 +216,9 @@ func downloadAndSave(remote *proto.DirEntry) error {
 	localFileHash := hex.EncodeToString(digest)
 
 	// Download file
-	ctx := NewAuthenticatedCtx(context.Background())
+	authCtx := NewAuthenticatedCtx(context.Background())
 	stream, err := grpcClient.DownloadFile(
-		ctx,
+		authCtx,
 		&proto.DownloadRequest{
 			Path:         remote.Path,
 			ExpectedHash: localFileHash,
@@ -175,6 +230,7 @@ func downloadAndSave(remote *proto.DirEntry) error {
 
 	totalExpectedSize := -1
 	recvBytes := 0
+
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
@@ -199,12 +255,11 @@ func downloadAndSave(remote *proto.DirEntry) error {
 		// local file as remote
 		return nil
 	}
-	// log.Printf("[DEBUG] Received %v bytes of data from network\n", recvBytes)
 
 	if totalExpectedSize != -1 && recvBytes != totalExpectedSize {
 		return fmt.Errorf("expected file of size %v but got %v bytes instead", totalExpectedSize, recvBytes)
 	}
 
-	// log.Printf("[INFO] Download file \"%v\" successfull\n", remotePath)
+	log.Printf("[SYNC] File \"%v\" updated successfully\n", remote.Path)
 	return nil
 }
