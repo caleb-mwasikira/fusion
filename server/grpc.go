@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	"github.com/caleb-mwasikira/fusion/lib"
-	"github.com/caleb-mwasikira/fusion/proto"
+	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"github.com/caleb-mwasikira/fusion/server/db"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

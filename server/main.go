@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/caleb-mwasikira/fusion/lib"
-	"github.com/caleb-mwasikira/fusion/proto"
+	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.21.12
-// source: proto/fuse.proto
+// source: lib/proto/fuse.proto
 
 package proto
 
@@ -697,5 +697,5 @@ var Fuse_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "proto/fuse.proto",
+	Metadata: "lib/proto/fuse.proto",
 }

@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/caleb-mwasikira/fusion/lib/events"
-	"github.com/caleb-mwasikira/fusion/proto"
+	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

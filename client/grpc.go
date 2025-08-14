@@ -6,7 +6,7 @@ import (
 	_ "embed"
 	"log"
 
-	"github.com/caleb-mwasikira/fusion/proto"
+	"github.com/caleb-mwasikira/fusion/lib/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
