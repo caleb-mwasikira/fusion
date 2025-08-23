@@ -4,11 +4,11 @@ gen:
 	lib/proto/*.proto
 
 run_server:
-	go run ./server -realpath ~/Documents \
+	go run ./server -realpath ~/Desktop/Server \
 	-mountpoint ~/FAT_BOY
 
 run_client:
-	go run ./client run -realpath ~/Public -mountpoint ~/TALL_BOY \
+	go run ./client run -realpath ~/Desktop/Client -mountpoint ~/TALL_BOY \
 	-username john -password password1234 -remote 127.0.0.1:1054
 
 create_dir:
