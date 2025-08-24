@@ -14,6 +14,7 @@ import (
 
 	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/lib/proto"
+	"github.com/caleb-mwasikira/fusion/server/auth"
 	"github.com/caleb-mwasikira/fusion/server/db"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -72,12 +73,12 @@ func (s FuseServer) Auth(ctx context.Context, req *proto.AuthRequest) (*proto.Au
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	passwordMatch := verifyPassword(user.Password, req.Password)
+	passwordMatch := auth.VerifyPassword(user.Password, req.Password)
 	if !passwordMatch {
 		return nil, status.Error(codes.InvalidArgument, "Invalid username or password")
 	}
 
-	accessToken, err := generateToken(*user)
+	accessToken, err := auth.GenerateToken(*user)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error generating json web token")
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/caleb-mwasikira/fusion/lib/proto"
+	"github.com/caleb-mwasikira/fusion/server/auth"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
@@ -160,8 +161,8 @@ func start_gRPCServer(errorChan chan<- error) {
 	transportCreds := credentials.NewServerTLSFromCert(&tlsCert)
 	grpcServer = grpc.NewServer(
 		grpc.Creds(transportCreds),
-		grpc.UnaryInterceptor(AuthInterceptor),
-		grpc.StreamInterceptor(AuthStreamInterceptor),
+		grpc.UnaryInterceptor(auth.AuthInterceptor),
+		grpc.StreamInterceptor(auth.AuthStreamInterceptor),
 	)
 
 	// Create new FuseServer instance

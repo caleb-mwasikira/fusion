@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/caleb-mwasikira/fusion/lib"
+	"github.com/caleb-mwasikira/fusion/server/auth"
 	"github.com/caleb-mwasikira/fusion/server/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -132,13 +133,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	passwordMatch := verifyPassword(user.Password, req.Password)
+	passwordMatch := auth.VerifyPassword(user.Password, req.Password)
 	if !passwordMatch {
 		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "invalid username or password"})
 		return
 	}
 
-	accessToken, err := generateToken(*user)
+	accessToken, err := auth.GenerateToken(*user)
 	if err != nil {
 		log.Printf("Error generating JWT; %v\n", err)
 		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error logging in user"})
@@ -165,7 +166,7 @@ func (req createOrgRequest) Validate() error {
 
 func createOrgHandler(w http.ResponseWriter, r *http.Request) {
 	// Fetch user value handed down from context
-	userObj := r.Context().Value(userCtxKey)
+	userObj := r.Context().Value(auth.USER_CTX_KEY)
 	user, ok := userObj.(*db.User)
 	if !ok {
 		log.Println("Error extracting user object from context")
@@ -333,13 +334,13 @@ func requireAuthMiddleware(next http.Handler) http.Handler {
 
 		token := fields[1]
 		var user db.User
-		if !validToken(token, &user) {
+		if !auth.ValidToken(token, &user) {
 			jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "access to this route requried user login."})
 			return
 		}
 
 		// embed user into context
-		newCtx := context.WithValue(r.Context(), userCtxKey, &user)
+		newCtx := context.WithValue(r.Context(), auth.USER_CTX_KEY, &user)
 
 		next.ServeHTTP(w, r.WithContext(newCtx))
 	})
