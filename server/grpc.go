@@ -66,9 +66,9 @@ func getUsersDir(ctx context.Context) (string, error) {
 }
 
 func (s FuseServer) Auth(ctx context.Context, req *proto.AuthRequest) (*proto.AuthResponse, error) {
-	log.Printf("[GRPC] Auth %v\n", req.Username)
+	log.Printf("[GRPC] Auth %v\n", req.Email)
 
-	user, err := users.Get(req.Username)
+	user, err := users.Get(req.Email)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}

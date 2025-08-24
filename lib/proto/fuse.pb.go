@@ -969,7 +969,7 @@ func (x *FileChunk) GetTotalSize() int64 {
 
 type AuthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Email         string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
 	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1005,9 +1005,9 @@ func (*AuthRequest) Descriptor() ([]byte, []int) {
 	return file_lib_proto_fuse_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *AuthRequest) GetUsername() string {
+func (x *AuthRequest) GetEmail() string {
 	if x != nil {
-		return x.Username
+		return x.Email
 	}
 	return ""
 }
@@ -1063,126 +1063,6 @@ func (x *AuthResponse) GetToken() string {
 	return ""
 }
 
-type CreateOrgRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OrgName       string                 `protobuf:"bytes,1,opt,name=org_name,json=orgName,proto3" json:"org_name,omitempty"`
-	DeptName      string                 `protobuf:"bytes,2,opt,name=dept_name,json=deptName,proto3" json:"dept_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateOrgRequest) Reset() {
-	*x = CreateOrgRequest{}
-	mi := &file_lib_proto_fuse_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateOrgRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateOrgRequest) ProtoMessage() {}
-
-func (x *CreateOrgRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_proto_fuse_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateOrgRequest.ProtoReflect.Descriptor instead.
-func (*CreateOrgRequest) Descriptor() ([]byte, []int) {
-	return file_lib_proto_fuse_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *CreateOrgRequest) GetOrgName() string {
-	if x != nil {
-		return x.OrgName
-	}
-	return ""
-}
-
-func (x *CreateOrgRequest) GetDeptName() string {
-	if x != nil {
-		return x.DeptName
-	}
-	return ""
-}
-
-type CreateUserRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
-	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
-	OrgName       string                 `protobuf:"bytes,3,opt,name=org_name,json=orgName,proto3" json:"org_name,omitempty"`
-	DeptName      string                 `protobuf:"bytes,4,opt,name=dept_name,json=deptName,proto3" json:"dept_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateUserRequest) Reset() {
-	*x = CreateUserRequest{}
-	mi := &file_lib_proto_fuse_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateUserRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateUserRequest) ProtoMessage() {}
-
-func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_proto_fuse_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
-func (*CreateUserRequest) Descriptor() ([]byte, []int) {
-	return file_lib_proto_fuse_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *CreateUserRequest) GetUsername() string {
-	if x != nil {
-		return x.Username
-	}
-	return ""
-}
-
-func (x *CreateUserRequest) GetPassword() string {
-	if x != nil {
-		return x.Password
-	}
-	return ""
-}
-
-func (x *CreateUserRequest) GetOrgName() string {
-	if x != nil {
-		return x.OrgName
-	}
-	return ""
-}
-
-func (x *CreateUserRequest) GetDeptName() string {
-	if x != nil {
-		return x.DeptName
-	}
-	return ""
-}
-
 type FileEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Event         uint32                 `protobuf:"varint,1,opt,name=event,proto3" json:"event,omitempty"`
@@ -1196,7 +1076,7 @@ type FileEvent struct {
 
 func (x *FileEvent) Reset() {
 	*x = FileEvent{}
-	mi := &file_lib_proto_fuse_proto_msgTypes[20]
+	mi := &file_lib_proto_fuse_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1088,7 @@ func (x *FileEvent) String() string {
 func (*FileEvent) ProtoMessage() {}
 
 func (x *FileEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_proto_fuse_proto_msgTypes[20]
+	mi := &file_lib_proto_fuse_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1101,7 @@ func (x *FileEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileEvent.ProtoReflect.Descriptor instead.
 func (*FileEvent) Descriptor() ([]byte, []int) {
-	return file_lib_proto_fuse_proto_rawDescGZIP(), []int{20}
+	return file_lib_proto_fuse_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FileEvent) GetEvent() uint32 {
@@ -1331,31 +1211,20 @@ const file_lib_proto_fuse_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x1d\n" +
 	"\n" +
-	"total_size\x18\x03 \x01(\x03R\ttotalSize\"E\n" +
-	"\vAuthRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
+	"total_size\x18\x03 \x01(\x03R\ttotalSize\"?\n" +
+	"\vAuthRequest\x12\x14\n" +
+	"\x05email\x18\x01 \x01(\tR\x05email\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\"$\n" +
 	"\fAuthResponse\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"J\n" +
-	"\x10CreateOrgRequest\x12\x19\n" +
-	"\borg_name\x18\x01 \x01(\tR\aorgName\x12\x1b\n" +
-	"\tdept_name\x18\x02 \x01(\tR\bdeptName\"\x83\x01\n" +
-	"\x11CreateUserRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x19\n" +
-	"\borg_name\x18\x03 \x01(\tR\aorgName\x12\x1b\n" +
-	"\tdept_name\x18\x04 \x01(\tR\bdeptName\"\x9e\x01\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x9e\x01\n" +
 	"\tFileEvent\x12\x14\n" +
 	"\x05event\x18\x01 \x01(\rR\x05event\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x19\n" +
 	"\bnew_path\x18\x03 \x01(\tR\anewPath\x12\x12\n" +
 	"\x04mode\x18\x04 \x01(\rR\x04mode\x128\n" +
-	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\xe6\x05\n" +
+	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\xf0\x04\n" +
 	"\x04Fuse\x12%\n" +
-	"\x04Auth\x12\f.AuthRequest\x1a\r.AuthResponse\"\x00\x128\n" +
-	"\tCreateOrg\x12\x11.CreateOrgRequest\x1a\x16.google.protobuf.Empty\"\x00\x12:\n" +
-	"\n" +
-	"CreateUser\x12\x12.CreateUserRequest\x1a\x16.google.protobuf.Empty\"\x00\x120\n" +
+	"\x04Auth\x12\f.AuthRequest\x1a\r.AuthResponse\"\x00\x120\n" +
 	"\fDownloadFile\x12\x10.DownloadRequest\x1a\n" +
 	".FileChunk\"\x000\x01\x12<\n" +
 	"\x12ObserveFileChanges\x12\x16.google.protobuf.Empty\x1a\n" +
@@ -1386,7 +1255,7 @@ func file_lib_proto_fuse_proto_rawDescGZIP() []byte {
 	return file_lib_proto_fuse_proto_rawDescData
 }
 
-var file_lib_proto_fuse_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_lib_proto_fuse_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_lib_proto_fuse_proto_goTypes = []any{
 	(*Owner)(nil),                 // 0: Owner
 	(*FileAttr)(nil),              // 1: FileAttr
@@ -1406,59 +1275,53 @@ var file_lib_proto_fuse_proto_goTypes = []any{
 	(*FileChunk)(nil),             // 15: FileChunk
 	(*AuthRequest)(nil),           // 16: AuthRequest
 	(*AuthResponse)(nil),          // 17: AuthResponse
-	(*CreateOrgRequest)(nil),      // 18: CreateOrgRequest
-	(*CreateUserRequest)(nil),     // 19: CreateUserRequest
-	(*FileEvent)(nil),             // 20: FileEvent
-	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),         // 22: google.protobuf.Empty
+	(*FileEvent)(nil),             // 18: FileEvent
+	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),         // 20: google.protobuf.Empty
 }
 var file_lib_proto_fuse_proto_depIdxs = []int32{
-	21, // 0: FileAttr.valid:type_name -> google.protobuf.Timestamp
-	21, // 1: FileAttr.a_time:type_name -> google.protobuf.Timestamp
-	21, // 2: FileAttr.m_time:type_name -> google.protobuf.Timestamp
-	21, // 3: FileAttr.c_time:type_name -> google.protobuf.Timestamp
+	19, // 0: FileAttr.valid:type_name -> google.protobuf.Timestamp
+	19, // 1: FileAttr.a_time:type_name -> google.protobuf.Timestamp
+	19, // 2: FileAttr.m_time:type_name -> google.protobuf.Timestamp
+	19, // 3: FileAttr.c_time:type_name -> google.protobuf.Timestamp
 	0,  // 4: FileAttr.owner:type_name -> Owner
 	8,  // 5: LookupRequest.node:type_name -> DirEntry
-	21, // 6: CreateResponse.entry_valid:type_name -> google.protobuf.Timestamp
+	19, // 6: CreateResponse.entry_valid:type_name -> google.protobuf.Timestamp
 	1,  // 7: CreateResponse.attr:type_name -> FileAttr
 	1,  // 8: DirEntry.attr:type_name -> FileAttr
 	8,  // 9: ReadDirAllResponse.entries:type_name -> DirEntry
 	8,  // 10: LinkResponse.node:type_name -> DirEntry
-	21, // 11: FileEvent.timestamp:type_name -> google.protobuf.Timestamp
+	19, // 11: FileEvent.timestamp:type_name -> google.protobuf.Timestamp
 	16, // 12: Fuse.Auth:input_type -> AuthRequest
-	18, // 13: Fuse.CreateOrg:input_type -> CreateOrgRequest
-	19, // 14: Fuse.CreateUser:input_type -> CreateUserRequest
-	14, // 15: Fuse.DownloadFile:input_type -> DownloadRequest
-	22, // 16: Fuse.ObserveFileChanges:input_type -> google.protobuf.Empty
-	2,  // 17: Fuse.Lookup:input_type -> LookupRequest
-	8,  // 18: Fuse.ReadDirAll:input_type -> DirEntry
-	3,  // 19: Fuse.Mkdir:input_type -> MkdirRequest
-	8,  // 20: Fuse.Rmdir:input_type -> DirEntry
-	8,  // 21: Fuse.Getattr:input_type -> DirEntry
-	4,  // 22: Fuse.Create:input_type -> CreateRequest
-	12, // 23: Fuse.Symlink:input_type -> LinkRequest
-	12, // 24: Fuse.Link:input_type -> LinkRequest
-	8,  // 25: Fuse.ReadAll:input_type -> DirEntry
-	6,  // 26: Fuse.Write:input_type -> WriteRequest
-	7,  // 27: Fuse.Rename:input_type -> RenameRequest
-	17, // 28: Fuse.Auth:output_type -> AuthResponse
-	22, // 29: Fuse.CreateOrg:output_type -> google.protobuf.Empty
-	22, // 30: Fuse.CreateUser:output_type -> google.protobuf.Empty
-	15, // 31: Fuse.DownloadFile:output_type -> FileChunk
-	20, // 32: Fuse.ObserveFileChanges:output_type -> FileEvent
-	8,  // 33: Fuse.Lookup:output_type -> DirEntry
-	9,  // 34: Fuse.ReadDirAll:output_type -> ReadDirAllResponse
-	8,  // 35: Fuse.Mkdir:output_type -> DirEntry
-	22, // 36: Fuse.Rmdir:output_type -> google.protobuf.Empty
-	1,  // 37: Fuse.Getattr:output_type -> FileAttr
-	5,  // 38: Fuse.Create:output_type -> CreateResponse
-	13, // 39: Fuse.Symlink:output_type -> LinkResponse
-	13, // 40: Fuse.Link:output_type -> LinkResponse
-	10, // 41: Fuse.ReadAll:output_type -> ReadAllResponse
-	11, // 42: Fuse.Write:output_type -> WriteResponse
-	22, // 43: Fuse.Rename:output_type -> google.protobuf.Empty
-	28, // [28:44] is the sub-list for method output_type
-	12, // [12:28] is the sub-list for method input_type
+	14, // 13: Fuse.DownloadFile:input_type -> DownloadRequest
+	20, // 14: Fuse.ObserveFileChanges:input_type -> google.protobuf.Empty
+	2,  // 15: Fuse.Lookup:input_type -> LookupRequest
+	8,  // 16: Fuse.ReadDirAll:input_type -> DirEntry
+	3,  // 17: Fuse.Mkdir:input_type -> MkdirRequest
+	8,  // 18: Fuse.Rmdir:input_type -> DirEntry
+	8,  // 19: Fuse.Getattr:input_type -> DirEntry
+	4,  // 20: Fuse.Create:input_type -> CreateRequest
+	12, // 21: Fuse.Symlink:input_type -> LinkRequest
+	12, // 22: Fuse.Link:input_type -> LinkRequest
+	8,  // 23: Fuse.ReadAll:input_type -> DirEntry
+	6,  // 24: Fuse.Write:input_type -> WriteRequest
+	7,  // 25: Fuse.Rename:input_type -> RenameRequest
+	17, // 26: Fuse.Auth:output_type -> AuthResponse
+	15, // 27: Fuse.DownloadFile:output_type -> FileChunk
+	18, // 28: Fuse.ObserveFileChanges:output_type -> FileEvent
+	8,  // 29: Fuse.Lookup:output_type -> DirEntry
+	9,  // 30: Fuse.ReadDirAll:output_type -> ReadDirAllResponse
+	8,  // 31: Fuse.Mkdir:output_type -> DirEntry
+	20, // 32: Fuse.Rmdir:output_type -> google.protobuf.Empty
+	1,  // 33: Fuse.Getattr:output_type -> FileAttr
+	5,  // 34: Fuse.Create:output_type -> CreateResponse
+	13, // 35: Fuse.Symlink:output_type -> LinkResponse
+	13, // 36: Fuse.Link:output_type -> LinkResponse
+	10, // 37: Fuse.ReadAll:output_type -> ReadAllResponse
+	11, // 38: Fuse.Write:output_type -> WriteResponse
+	20, // 39: Fuse.Rename:output_type -> google.protobuf.Empty
+	26, // [26:40] is the sub-list for method output_type
+	12, // [12:26] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -1475,7 +1338,7 @@ func file_lib_proto_fuse_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_proto_fuse_proto_rawDesc), len(file_lib_proto_fuse_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

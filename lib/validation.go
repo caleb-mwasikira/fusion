@@ -2,6 +2,8 @@ package lib
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -32,5 +34,38 @@ func ValidatePassword(password string) error {
 	}
 
 	// TODO: check password strength
+	return nil
+}
+
+func ValidateAddress(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+
+	if err = validateHost(host); err != nil {
+		return err
+	}
+	return validatePort(port)
+}
+
+func validateHost(host string) error {
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip == nil {
+		return fmt.Errorf("invalid IP address")
+	}
+	return nil
+}
+
+func validatePort(port string) error {
+	iport, err := strconv.Atoi(port)
+	if err != nil {
+		return err
+	}
+	if iport <= 0 && iport > 65535 {
+		return fmt.Errorf("invalid port range")
+	}
 	return nil
 }

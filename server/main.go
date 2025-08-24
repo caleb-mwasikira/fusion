@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"embed"
 	"flag"
 	"fmt"
 	"log"
@@ -21,7 +19,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 type key string
@@ -29,7 +26,8 @@ type key string
 var (
 	debug                bool
 	realpath, mountpoint string
-	port                 uint
+	grpcAddr             string
+	webAddr              string
 
 	SECRET_KEY string
 
@@ -48,13 +46,22 @@ func init() {
 	flag.BoolVar(&debug, "debug", false, "Display FUSE debug logs to stdout.")
 	flag.StringVar(&realpath, "realpath", "", "Physical directory where files are stored")
 	flag.StringVar(&mountpoint, "mountpoint", filepath.Join(homeDir, "FAT_BOY"), "Virtual directory where files appear")
-	flag.UintVar(&port, "port", 1054, "Port to run the GRPC FUSE service on.")
+	flag.StringVar(&grpcAddr, "grpc-address", "0.0.0.0:1054", "Address to run the GRPC FUSE service on.")
+	flag.StringVar(&webAddr, "web-address", "0.0.0.0:5000", "Address to run the web server")
 	flag.BoolVar(&help, "help", false, "Display help message.")
 	flag.Parse()
 
 	if help {
 		flag.Usage()
 		os.Exit(0)
+	}
+
+	if err = lib.ValidateAddress(grpcAddr); err != nil {
+		log.Fatalf("invalid -grpc-address provided; %v\n", err)
+	}
+
+	if err = lib.ValidateAddress(webAddr); err != nil {
+		log.Fatalf("invalid -web-address provided; %v\n", err)
 	}
 
 	err = lib.LoadEnv()
@@ -124,43 +131,14 @@ func mountFileSystem(errorChan chan<- error) {
 	log.Fatalln("Filesystem unmounted by user")
 }
 
-//go:embed certs/server.crt
-//go:embed certs/server.key
-var certDir embed.FS
-
-func loadTLSCertificate() (tls.Certificate, error) {
-	// Read certificate data
-	certData, err := certDir.ReadFile("certs/server.crt")
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	// Read private key data
-	keyData, err := certDir.ReadFile("certs/server.key")
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	return tls.X509KeyPair(certData, keyData)
-}
-
 func start_gRPCServer(errorChan chan<- error) {
-	address := fmt.Sprintf(":%v", port)
-	listener, err := net.Listen("tcp", address)
+	listener, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
 		errorChan <- err
 		return
 	}
 
-	tlsCert, err := loadTLSCertificate()
-	if err != nil {
-		errorChan <- err
-		return
-	}
-
-	transportCreds := credentials.NewServerTLSFromCert(&tlsCert)
 	grpcServer = grpc.NewServer(
-		grpc.Creds(transportCreds),
 		grpc.UnaryInterceptor(auth.AuthInterceptor),
 		grpc.StreamInterceptor(auth.AuthStreamInterceptor),
 	)
@@ -172,7 +150,7 @@ func start_gRPCServer(errorChan chan<- error) {
 	fuseServer := NewFuseServer(ctx, mountpoint)
 	proto.RegisterFuseServer(grpcServer, fuseServer)
 
-	log.Printf("Starting GRPC server on address; %v\n", address)
+	log.Printf("Starting GRPC server on address; %v\n", grpcAddr)
 	err = grpcServer.Serve(listener)
 	if err != nil {
 		errorChan <- err

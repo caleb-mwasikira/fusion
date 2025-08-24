@@ -21,8 +21,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Fuse_Auth_FullMethodName               = "/Fuse/Auth"
-	Fuse_CreateOrg_FullMethodName          = "/Fuse/CreateOrg"
-	Fuse_CreateUser_FullMethodName         = "/Fuse/CreateUser"
 	Fuse_DownloadFile_FullMethodName       = "/Fuse/DownloadFile"
 	Fuse_ObserveFileChanges_FullMethodName = "/Fuse/ObserveFileChanges"
 	Fuse_Lookup_FullMethodName             = "/Fuse/Lookup"
@@ -43,8 +41,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FuseClient interface {
 	Auth(ctx context.Context, in *AuthRequest, opts ...grpc.CallOption) (*AuthResponse, error)
-	CreateOrg(ctx context.Context, in *CreateOrgRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	DownloadFile(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileChunk], error)
 	ObserveFileChanges(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileEvent], error)
 	// FUSE functions
@@ -73,26 +69,6 @@ func (c *fuseClient) Auth(ctx context.Context, in *AuthRequest, opts ...grpc.Cal
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthResponse)
 	err := c.cc.Invoke(ctx, Fuse_Auth_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *fuseClient) CreateOrg(ctx context.Context, in *CreateOrgRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, Fuse_CreateOrg_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *fuseClient) CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, Fuse_CreateUser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +228,6 @@ func (c *fuseClient) Rename(ctx context.Context, in *RenameRequest, opts ...grpc
 // for forward compatibility.
 type FuseServer interface {
 	Auth(context.Context, *AuthRequest) (*AuthResponse, error)
-	CreateOrg(context.Context, *CreateOrgRequest) (*emptypb.Empty, error)
-	CreateUser(context.Context, *CreateUserRequest) (*emptypb.Empty, error)
 	DownloadFile(*DownloadRequest, grpc.ServerStreamingServer[FileChunk]) error
 	ObserveFileChanges(*emptypb.Empty, grpc.ServerStreamingServer[FileEvent]) error
 	// FUSE functions
@@ -280,12 +254,6 @@ type UnimplementedFuseServer struct{}
 
 func (UnimplementedFuseServer) Auth(context.Context, *AuthRequest) (*AuthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Auth not implemented")
-}
-func (UnimplementedFuseServer) CreateOrg(context.Context, *CreateOrgRequest) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateOrg not implemented")
-}
-func (UnimplementedFuseServer) CreateUser(context.Context, *CreateUserRequest) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateUser not implemented")
 }
 func (UnimplementedFuseServer) DownloadFile(*DownloadRequest, grpc.ServerStreamingServer[FileChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method DownloadFile not implemented")
@@ -361,42 +329,6 @@ func _Fuse_Auth_Handler(srv interface{}, ctx context.Context, dec func(interface
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FuseServer).Auth(ctx, req.(*AuthRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Fuse_CreateOrg_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateOrgRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FuseServer).CreateOrg(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Fuse_CreateOrg_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).CreateOrg(ctx, req.(*CreateOrgRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Fuse_CreateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateUserRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FuseServer).CreateUser(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Fuse_CreateUser_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FuseServer).CreateUser(ctx, req.(*CreateUserRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -631,14 +563,6 @@ var Fuse_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Auth",
 			Handler:    _Fuse_Auth_Handler,
-		},
-		{
-			MethodName: "CreateOrg",
-			Handler:    _Fuse_CreateOrg_Handler,
-		},
-		{
-			MethodName: "CreateUser",
-			Handler:    _Fuse_CreateUser_Handler,
 		},
 		{
 			MethodName: "Lookup",

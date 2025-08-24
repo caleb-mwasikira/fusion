@@ -22,7 +22,7 @@ var (
 	debug                bool
 	remote               string
 	realpath, mountpoint string
-	username, password   string
+	email, password      string
 	orgName, deptName    string
 
 	fuseServer *fuse.Server
@@ -37,7 +37,7 @@ func init() {
 	}
 
 	authFlag := flag.NewFlagSet("auth", flag.ExitOnError)
-	authFlag.StringVar(&username, "username", "", "Name of the user connecting to remote")
+	authFlag.StringVar(&email, "email", "", "Name of the user connecting to remote")
 	authFlag.StringVar(&password, "password", "", "Password of the user connecting to remote")
 	authFlag.StringVar(&remote, "remote", "", "Remote GRPC FUSE server.")
 
@@ -45,21 +45,9 @@ func init() {
 	runFlag.BoolVar(&debug, "debug", false, "Display FUSE debug logs to stdout.")
 	runFlag.StringVar(&realpath, "realpath", "", "Physical directory where files are stored")
 	runFlag.StringVar(&mountpoint, "mountpoint", filepath.Join(homeDir, "TALL_BOY"), "Virtual directory where files appear")
-	runFlag.StringVar(&username, "username", "", "Name of the user connecting to remote")
+	runFlag.StringVar(&email, "email", "", "Name of the user connecting to remote")
 	runFlag.StringVar(&password, "password", "", "Password of the user connecting to remote")
 	runFlag.StringVar(&remote, "remote", "", "Remote GRPC FUSE server.")
-
-	createDirFlag := flag.NewFlagSet("create_dir", flag.ExitOnError)
-	createDirFlag.StringVar(&orgName, "org", "", "Name of the organization to create")
-	createDirFlag.StringVar(&deptName, "dept", "", "Name of the department to create")
-	createDirFlag.StringVar(&remote, "remote", "", "Remote GRPC FUSE server.")
-
-	createUserFlag := flag.NewFlagSet("create_user", flag.ExitOnError)
-	createUserFlag.StringVar(&username, "username", "", "Name of the user to create")
-	createUserFlag.StringVar(&password, "password", "", "Password of the user to create")
-	createUserFlag.StringVar(&orgName, "org", "", "Name of the organization the user belongs to")
-	createUserFlag.StringVar(&deptName, "dept", "", "Name of the department the user belongs to")
-	createUserFlag.StringVar(&remote, "remote", "", "Remote GRPC FUSE server.")
 
 	var help bool
 	flag.BoolVar(&help, "help", false, "Display help message")
@@ -71,14 +59,6 @@ func init() {
 
 		fmt.Printf("Usage of %v:\n", runFlag.Name())
 		runFlag.PrintDefaults()
-		fmt.Printf("\r\n")
-
-		fmt.Printf("Usage of %v:\n", createDirFlag.Name())
-		createDirFlag.PrintDefaults()
-		fmt.Printf("\r\n")
-
-		fmt.Printf("Usage of %v:\n", createUserFlag.Name())
-		createUserFlag.PrintDefaults()
 		fmt.Printf("\r\n")
 
 		fmt.Printf("Common arguments:\n")
@@ -102,10 +82,6 @@ func init() {
 		parseFlag(authFlag)
 	case "run":
 		parseFlag(runFlag)
-	case "create_dir":
-		parseFlag(createDirFlag)
-	case "create_user":
-		parseFlag(createUserFlag)
 	default:
 		flag.Usage()
 		log.Fatalln("Invalid command")
@@ -185,7 +161,7 @@ func runFileSystem() {
 	// Before we mount the FUSE file system first lets
 	// make sure we are authenticated with the remote server
 	response, err := grpcClient.Auth(context.Background(), &proto.AuthRequest{
-		Username: username,
+		Email:    email,
 		Password: password,
 	})
 	if err != nil {
@@ -248,7 +224,7 @@ func main() {
 	switch command {
 	case "auth":
 		response, err := grpcClient.Auth(context.Background(), &proto.AuthRequest{
-			Username: username,
+			Email:    email,
 			Password: password,
 		})
 		if err != nil {
@@ -258,26 +234,6 @@ func main() {
 
 	case "run":
 		runFileSystem()
-
-	case "create_user":
-		_, err := grpcClient.CreateUser(context.Background(), &proto.CreateUserRequest{
-			Username: username,
-			Password: password,
-			OrgName:  orgName,
-			DeptName: deptName,
-		})
-		if err != nil {
-			log.Fatalf("Error creating user; %v\n", err)
-		}
-
-	case "create_dir":
-		_, err := grpcClient.CreateOrg(context.Background(), &proto.CreateOrgRequest{
-			OrgName:  orgName,
-			DeptName: deptName,
-		})
-		if err != nil {
-			log.Fatalf("Error creating organization; %v\n", err)
-		}
 
 	default:
 		//

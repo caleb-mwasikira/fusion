@@ -155,7 +155,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return JWT to user
-	jsonResponse(w, http.StatusOK, map[string]string{
+	jsonResponse(w, http.StatusOK, map[string]any{
 		"message":      "Login successful",
 		"access_token": accessToken,
 	})
@@ -420,7 +420,7 @@ func startWebServer(doneChan chan<- error) {
 		r.Get("/create-organization", createOrgHandler)
 	})
 
-	address := "127.0.0.1:5000"
+	address := "0.0.0.0:5000"
 	log.Printf("Starting web server on http://%v\n", address)
 	err := http.ListenAndServe(address, r)
 	if err != nil {
