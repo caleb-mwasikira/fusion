@@ -65,10 +65,10 @@ func (m *PasswordResetModel) Insert(token PasswordResetToken) (int64, error) {
 	return result.RowsAffected()
 }
 
-// Fetches password_reset_token by user's email
-func (m *PasswordResetModel) Get(email string) (*PasswordResetToken, error) {
-	query := "SELECT * FROM password_reset_tokens WHERE email = ? AND expires_at > ?"
-	row := m.db.QueryRow(query, email, time.Now())
+// Fetches password_reset_token by user's email and token
+func (m *PasswordResetModel) Get(email, otp string) (*PasswordResetToken, error) {
+	query := "SELECT * FROM password_reset_tokens WHERE email= ? AND otp= ? AND expires_at > ?"
+	row := m.db.QueryRow(query, email, otp, time.Now())
 
 	token := PasswordResetToken{}
 	err := row.Scan(
@@ -82,4 +82,17 @@ func (m *PasswordResetModel) Get(email string) (*PasswordResetToken, error) {
 		return nil, err
 	}
 	return &token, nil
+}
+
+func (m *PasswordResetModel) Delete(email, otp string) (int64, error) {
+	query := "DELETE password_reset_tokens WHERE email=? AND otp=?"
+	result, err := m.db.Exec(
+		query,
+		email,
+		otp,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

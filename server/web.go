@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/smtp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,13 +64,19 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "username, email, password, org_name, dept_name fields required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "username, email, password, org_name, dept_name fields required"})
 		return
 	}
 
 	err = req.Validate()
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+
+	ok, _ := users.Exists(req.Email)
+	if ok {
+		jsonResponse(w, http.StatusConflict, map[string]string{"message": "user account already exists"})
 		return
 	}
 
@@ -76,7 +84,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	baseDir := filepath.Join(realpath, req.OrgName, req.DeptName)
 	if !dirExists(baseDir) {
 		errMessage := fmt.Sprintf("Organization '%v' with department '%v' NOT found", req.OrgName, req.DeptName)
-		jsonResponse(w, http.StatusNotFound, map[string]string{"error": errMessage})
+		jsonResponse(w, http.StatusNotFound, map[string]string{"message": errMessage})
 		return
 	}
 
@@ -88,14 +96,14 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		req.DeptName,
 	)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
 
 	_, err = users.Insert(*user)
 	if err != nil {
 		log.Printf("Error creating user account; %v\n", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error creating user account"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "error creating user account"})
 		return
 	}
 
@@ -116,33 +124,33 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "username, password fields required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "username, password fields required"})
 		return
 	}
 
 	err = req.Validate()
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
 
 	user, err := users.Get(req.Email)
 	if err != nil {
 		log.Printf("Error fetching user account; %v\n", err)
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "invalid username or password"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "invalid username or password"})
 		return
 	}
 
 	passwordMatch := auth.VerifyPassword(user.Password, req.Password)
 	if !passwordMatch {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "invalid username or password"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "invalid username or password"})
 		return
 	}
 
 	accessToken, err := auth.GenerateToken(*user)
 	if err != nil {
 		log.Printf("Error generating JWT; %v\n", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error logging in user"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "error logging in user"})
 		return
 	}
 
@@ -170,7 +178,7 @@ func createOrgHandler(w http.ResponseWriter, r *http.Request) {
 	user, ok := userObj.(*db.User)
 	if !ok {
 		log.Println("Error extracting user object from context")
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error fetching current logged in user"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "error fetching current logged in user"})
 		return
 	}
 
@@ -178,13 +186,13 @@ func createOrgHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "org_name and dept_name fields required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "org_name and dept_name fields required"})
 		return
 	}
 
 	err = req.Validate()
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "org_name field required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "org_name field required"})
 		return
 	}
 
@@ -198,7 +206,7 @@ func createOrgHandler(w http.ResponseWriter, r *http.Request) {
 		req.OrgPassword,
 	)
 	if err != nil {
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 		return
 	}
 
@@ -209,11 +217,51 @@ func createOrgHandler(w http.ResponseWriter, r *http.Request) {
 		os.RemoveAll(orgDir)
 
 		log.Printf("error creating organization; %v\n", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error creating organization"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "error creating organization"})
 		return
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "organization and department directory created successfully"})
+}
+
+func sendEmail(email, otp string) error {
+	err := lib.LoadEnv()
+	if err != nil {
+		return fmt.Errorf("error loading env file; %v", err)
+	}
+
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	from := os.Getenv("SMTP_EMAIL")
+	password := os.Getenv("SMTP_PASSWORD") // App Password (not actual Gmail password)
+	to := []string{email}
+
+	message := []byte(
+		"Subject: Reset your password\r\n" +
+			"MIME-version: 1.0;\r\n" +
+			"Content-Type: text/html; charset=\"UTF-8\";\r\n" +
+			"\r\n" +
+			"<html>" +
+			"<body style='font-family: Arial, sans-serif;'>" +
+			"<h2>Password Reset Request</h2>" +
+			"<p>Hello, there</p>" +
+			"<p>We received a request to reset your password on your File Manager account. Use the following One-Time Password (OTP) to continue:</p>" +
+			"<div style='font-size: 24px; font-weight: bold; background:#f4f4f4; padding:10px; border-radius:5px; display:inline-block;'>" + otp + "</div>" +
+			"<p>This code will expire in <b>10 minutes</b>.</p>" +
+			"<p>If you didn't request a password reset, you can safely ignore this email.</p>" +
+			"<br>" +
+			"<p>Best regards,<br>File Manager</p>" +
+			"</body>" +
+			"</html>",
+	)
+
+	auth := smtp.PlainAuth("", from, password, smtpHost)
+	addr := net.JoinHostPort(smtpHost, smtpPort)
+	err = smtp.SendMail(addr, auth, from, to, message)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return nil
 }
 
 type forgotPasswordRequest struct {
@@ -232,14 +280,14 @@ func forgotPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "email field required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "email field required"})
 		return
 	}
 
 	// validate email
 	err = req.Validate()
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
 
@@ -258,12 +306,17 @@ func forgotPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = passwordResetTokens.Insert(*token)
 	if err != nil {
 		log.Printf("Error saving password_reset_token; %v\n", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "error creating password reset token"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "error creating password reset token"})
 		return
 	}
 
-	// TODO: Send password reset token to user's email
-	log.Println("Password Reset Token: ", token)
+	// Send password reset token to user's email
+	go func(email, otp string) {
+		err := sendEmail(email, otp)
+		if err != nil {
+			log.Printf("Error sending email; %v\n", err)
+		}
+	}(req.Email, token.OTP)
 
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "password reset token has been sent to your email"})
 }
@@ -289,26 +342,26 @@ func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&req)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "email, otp and new_password fields required"})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "email, otp and new_password fields required"})
 		return
 	}
 
 	err = req.Validate()
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		jsonResponse(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
 
-	token, err := passwordResetTokens.Get(req.Email)
+	token, err := passwordResetTokens.Get(req.Email, req.OTP)
 	if err != nil {
 		log.Printf("Error fetching password_reset_token; %v\n", err)
-		jsonResponse(w, http.StatusNotFound, map[string]string{"error": "invalid or expired OTP"})
+		jsonResponse(w, http.StatusNotFound, map[string]string{"message": "invalid or expired OTP"})
 		return
 	}
 
 	// verify database otp matches one passed in by user
 	if token.OTP != req.OTP {
-		jsonResponse(w, http.StatusNotFound, map[string]string{"error": "invalid or expired OTP"})
+		jsonResponse(w, http.StatusNotFound, map[string]string{"message": "invalid or expired OTP"})
 		return
 	}
 
@@ -316,9 +369,12 @@ func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = users.ChangePassword(req.Email, req.NewPassword)
 	if err != nil {
 		log.Printf("Error changing user password; %v\n", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]string{"error": "invalid or expired OTP"})
+		jsonResponse(w, http.StatusInternalServerError, map[string]string{"message": "invalid or expired OTP"})
 		return
 	}
+
+	// Invalidate OTP to prevent re-use
+	go passwordResetTokens.Delete(req.Email, req.OTP)
 
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "Password reset successful"})
 }
@@ -328,14 +384,14 @@ func requireAuthMiddleware(next http.Handler) http.Handler {
 		authHeader := r.Header.Get("Authorization")
 		fields := strings.Split(authHeader, " ")
 		if len(fields) != 2 {
-			jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "invalid Authorization header format"})
+			jsonResponse(w, http.StatusBadRequest, map[string]string{"message": "invalid Authorization header format"})
 			return
 		}
 
 		token := fields[1]
 		var user db.User
 		if !auth.ValidToken(token, &user) {
-			jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "access to this route requried user login."})
+			jsonResponse(w, http.StatusUnauthorized, map[string]string{"message": "access to this route requried user login."})
 			return
 		}
 
