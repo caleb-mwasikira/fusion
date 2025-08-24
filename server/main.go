@@ -31,6 +31,7 @@ var (
 	port                 uint
 
 	SECRET_KEY string
+
 	fuseServer *fuse.Server
 	grpcServer *grpc.Server
 	userCtxKey key = "user"
@@ -178,15 +179,18 @@ func start_gRPCServer(errorChan chan<- error) {
 }
 
 func main() {
-	errorChan1 := make(chan error)
-	errorChan2 := make(chan error)
+	fileSystemChan := make(chan error)
+	gRPCChan := make(chan error)
+	webChan := make(chan error)
 
-	go mountFileSystem(errorChan1)
-	go start_gRPCServer(errorChan2)
+	go mountFileSystem(fileSystemChan)
+	go start_gRPCServer(gRPCChan)
+	go startWebServer(webChan)
 
 	const MAX_FAILS = 3
 	numberFuseFails := 0
 	numberGrpcFails := 0
+	numberWebFails := 0
 
 	// Close servers when SIGINT and SIGTERM signals are received
 	sigChan := make(chan os.Signal, 1)
@@ -213,23 +217,32 @@ func main() {
 	for {
 		// Restart FUSE filesystem whenever it fails
 		select {
-		case err := <-errorChan1:
+		case err := <-fileSystemChan:
 			log.Printf("Error mounting FUSE filesystem; %v\n", err)
 
-			numberFuseFails += 1
+			numberFuseFails++
 			if numberFuseFails >= MAX_FAILS {
 				log.Fatalln("Too many attempts restarting failed FUSE filesystem")
 			}
-			go mountFileSystem(errorChan1)
+			go mountFileSystem(fileSystemChan)
 
-		case err := <-errorChan2:
+		case err := <-gRPCChan:
 			log.Printf("Error running GRPC FUSE service; %v\n", err)
 
-			numberGrpcFails += 1
+			numberGrpcFails++
 			if numberFuseFails >= MAX_FAILS {
 				log.Fatalln("Too many attempts restarting failed GRPC FUSE service")
 			}
-			go start_gRPCServer(errorChan2)
+			go start_gRPCServer(gRPCChan)
+
+		case err := <-webChan:
+			log.Printf("Error running web server; %v\n", err)
+
+			numberWebFails++
+			if numberWebFails >= MAX_FAILS {
+				log.Fatalln("Too many attempts restarting failed web server")
+			}
+			go startWebServer(webChan)
 
 		default:
 			time.Sleep(30 * time.Second)

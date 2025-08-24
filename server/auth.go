@@ -22,8 +22,6 @@ import (
 )
 
 var (
-	userModel *db.UserModel = db.NewUserModel()
-
 	nonProtectedMethods []string = []string{"Auth", "CreateOrg", "CreateUser"}
 )
 
@@ -37,13 +35,13 @@ func AuthInterceptor(
 	info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler,
 ) (resp any, err error) {
-	isNonProtectedMethod := slices.ContainsFunc(
+	skipAuth := slices.ContainsFunc(
 		nonProtectedMethods,
 		func(method string) bool {
 			return strings.Contains(info.FullMethod, method)
 		},
 	)
-	if isNonProtectedMethod {
+	if skipAuth {
 		return handler(ctx, req)
 	}
 
@@ -111,15 +109,6 @@ func AuthStreamInterceptor(
 		ctx:          newCtx,
 	}
 	return handler(srv, newServerStream)
-}
-
-func authUser(username, password string) (*db.User, bool) {
-	user, err := userModel.Get(username)
-	if err != nil {
-		return nil, false
-	}
-	passwordMatch := verifyPassword(user.Password, password)
-	return user, passwordMatch
 }
 
 func generateToken(user db.User) (string, error) {

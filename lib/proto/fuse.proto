@@ -110,18 +110,6 @@ message AuthResponse {
     string token = 1;
 }
 
-message CreateOrgRequest {
-    string org_name = 1;
-    string dept_name = 2;
-}
-
-message CreateUserRequest {
-    string username = 1;
-    string password = 2;
-    string org_name = 3;
-    string dept_name = 4;
-}
-
 message FileEvent {
     uint32 event = 1;
     string path = 2;
@@ -132,8 +120,6 @@ message FileEvent {
 
 service Fuse {
     rpc Auth(AuthRequest) returns (AuthResponse) {};
-    rpc CreateOrg(CreateOrgRequest) returns (google.protobuf.Empty) {};
-    rpc CreateUser(CreateUserRequest) returns (google.protobuf.Empty) {};
     rpc DownloadFile(DownloadRequest) returns (stream FileChunk) {};
     rpc ObserveFileChanges(google.protobuf.Empty) returns (stream FileEvent) {};
 

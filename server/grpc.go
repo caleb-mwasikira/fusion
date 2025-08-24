@@ -67,72 +67,23 @@ func getUsersDir(ctx context.Context) (string, error) {
 func (s FuseServer) Auth(ctx context.Context, req *proto.AuthRequest) (*proto.AuthResponse, error) {
 	log.Printf("[GRPC] Auth %v\n", req.Username)
 
-	user, ok := authUser(req.Username, req.Password)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "Invalid username or password")
-	}
-
-	tokenString, err := generateToken(*user)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "[ERROR] generating json web token")
-	}
-	return &proto.AuthResponse{
-		Token: tokenString,
-	}, nil
-}
-
-func (s FuseServer) CreateOrg(ctx context.Context, req *proto.CreateOrgRequest) (*emptypb.Empty, error) {
-	log.Printf("[GRPC] CreateOrg %v[%v]\n", req.OrgName, req.DeptName)
-	isEmpty := func(value string) bool {
-		return strings.TrimSpace(value) == ""
-	}
-
-	if isEmpty(req.OrgName) {
-		return nil, status.Error(codes.InvalidArgument, "Missing argument OrgName")
-	}
-
-	// Create organization directory
-	baseDir := filepath.Join(s.path, req.OrgName)
-	err := os.MkdirAll(baseDir, 0751)
-	if err != nil {
-		return nil, grpcError(err)
-	}
-
-	if !isEmpty(req.DeptName) {
-		// Create department directory
-		deptDir := filepath.Join(baseDir, req.DeptName)
-		err := os.MkdirAll(deptDir, 0771)
-		if err != nil {
-			return nil, grpcError(err)
-		}
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
-func (s FuseServer) CreateUser(ctx context.Context, req *proto.CreateUserRequest) (*emptypb.Empty, error) {
-	log.Printf("[GRPC] CreateUser %v@%v[%v]\n", req.Username, req.OrgName, req.DeptName)
-
-	// Verify that users orgName and deptName exist
-	baseDir := filepath.Join(s.path, req.OrgName, req.DeptName)
-	if !dirExists(baseDir) {
-		return nil, status.Errorf(codes.NotFound, "Organization \"%v\" with department \"%v\" NOT found", req.OrgName, req.DeptName)
-	}
-
-	user, err := db.NewUser(
-		req.Username, req.Password,
-		req.OrgName, req.DeptName,
-		SECRET_KEY,
-	)
+	user, err := users.Get(req.Username)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	_, err = userModel.Insert(*user)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "[ERROR] saving user to database; %v", err)
+	passwordMatch := verifyPassword(user.Password, req.Password)
+	if !passwordMatch {
+		return nil, status.Error(codes.InvalidArgument, "Invalid username or password")
 	}
-	return &emptypb.Empty{}, nil
+
+	accessToken, err := generateToken(*user)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error generating json web token")
+	}
+	return &proto.AuthResponse{
+		Token: accessToken,
+	}, nil
 }
 
 func (s FuseServer) DownloadFile(req *proto.DownloadRequest, stream grpc.ServerStreamingServer[proto.FileChunk]) error {

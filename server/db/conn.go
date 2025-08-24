@@ -2,8 +2,12 @@ package db
 
 import (
 	"database/sql"
+	"embed"
+	"fmt"
 	"log"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/caleb-mwasikira/fusion/lib"
 	"github.com/go-sql-driver/mysql"
@@ -11,13 +15,29 @@ import (
 )
 
 var (
+	SECRET_KEY string
+
 	db *sql.DB
+)
+
+type databaseType uint
+
+const (
+	mysqlDb databaseType = iota
+	sqliteDb
 )
 
 func init() {
 	err := lib.LoadEnv()
 	if err != nil {
 		log.Fatalf("Error loading env variables; %v\n", err)
+	}
+
+	// Ensure SECRET_KEY is always set
+	SECRET_KEY = os.Getenv("SECRET_KEY")
+
+	if strings.TrimSpace(SECRET_KEY) == "" {
+		log.Fatalln("Missing SECRET_KEY env variable")
 	}
 
 	mysqlConfig := mysql.Config{
@@ -32,9 +52,9 @@ func init() {
 		log.Fatalf("Error opening MySQL database connection; %v", err)
 	}
 
-	// err = migrateDatabase()
+	// err = migrateDatabase(mysqlDb)
 	// if err != nil {
-	// 	log.Fatalf("[ERROR] Migration failed; %v\n", err)
+	// 	log.Fatalf("Migration failed; %v\n", err)
 	// }
 }
 
@@ -80,42 +100,113 @@ func openMysqlDB(conf mysql.Config) (*sql.DB, error) {
 // 	return db, nil
 // }
 
-// //go:embed sql/*.sql
-// var sqlDir embed.FS
+//go:embed sql/*.sql
+var sqlDir embed.FS
 
-// func migrateDatabase() error {
-// 	files, err := sqlDir.ReadDir("sql")
-// 	if err != nil {
-// 		return err
-// 	}
+func migrateDatabase(dbType databaseType) error {
+	files, err := sqlDir.ReadDir("sql")
+	if err != nil {
+		return err
+	}
 
-// 	if len(files) == 0 {
-// 		log.Println("[WARN] no migration files found")
-// 		return nil
-// 	}
+	if len(files) == 0 {
+		log.Println("[WARN] no migration files found")
+		return nil
+	}
 
-// 	for _, file := range files {
-// 		log.Printf("[INFO] Migrating file \"%v\" ...\n", file.Name())
+	switch dbType {
+	case mysqlDb:
+		files = slices.DeleteFunc(files, func(file os.DirEntry) bool {
+			isMysqlFile := strings.Contains(file.Name(), "mysql")
+			return !isMysqlFile
+		})
+	case sqliteDb:
+		files = slices.DeleteFunc(files, func(file os.DirEntry) bool {
+			isSqliteFile := strings.Contains(file.Name(), "sqlite")
+			return !isSqliteFile
+		})
+	}
 
-// 		if file.Type().IsRegular() {
-// 			path := fmt.Sprintf("sql/%v", file.Name())
+	for _, file := range files {
+		log.Printf("[INFO] Migrating file \"%v\" ...\n", file.Name())
 
-// 			data, err := sqlDir.ReadFile(path)
-// 			if err != nil {
-// 				return fmt.Errorf("error reading file \"%v\"; %v", file.Name(), err)
-// 			}
+		if file.Type().IsRegular() {
+			path := fmt.Sprintf("sql/%v", file.Name())
 
-// 			if len(data) == 0 {
-// 				log.Printf("[WARN] sql file \"%v\" empty\n", file.Name())
-// 				continue
-// 			}
+			data, err := sqlDir.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("error reading file \"%v\"; %v", file.Name(), err)
+			}
 
-// 			_, err = db.Exec(string(data))
-// 			if err != nil {
-// 				return fmt.Errorf("error executing query from file \"%v\"; %v", file.Name(), err)
-// 			}
-// 			log.Printf("[INFO] Migration \"%v\" successfull\n", file.Name())
-// 		}
-// 	}
-// 	return nil
-// }
+			if len(data) == 0 {
+				log.Printf("[WARN] sql file \"%v\" empty\n", file.Name())
+				continue
+			}
+
+			dangerousKeywords := []string{"DROP", "TRUNCATE"}
+			isDangerousQuery := func(query string) bool {
+				upper := strings.ToUpper(query)
+
+				for _, keyword := range dangerousKeywords {
+					if strings.Contains(upper, keyword) {
+						// dangerous query
+						return true
+					}
+				}
+				return false
+			}
+
+			careful := true
+			skipAllDangerous := false
+
+			queries := strings.Split(string(data), ";")
+
+			for _, query := range queries {
+				query = strings.TrimSpace(query)
+				if query == "" {
+					continue
+				}
+
+				dangerousQuery := isDangerousQuery(query)
+				if dangerousQuery && skipAllDangerous {
+					continue
+				}
+
+				permissionRequired := dangerousQuery && careful
+				if permissionRequired {
+					// Request permission to execute
+					log.Printf("⚠️ Detected potentially dangerous query:\n%v\n", query)
+					log.Println("Do you want to still execute it? Y/n/S (Skip all)/A (Yes to all)")
+
+					var input string
+					if _, err = fmt.Scanln(&input); err != nil {
+						return err
+					}
+
+					switch strings.ToUpper(strings.TrimSpace(input)) {
+					case "Y":
+						// allow this query only
+					case "A":
+						// allow all future dangerous queries
+						careful = false
+					case "S":
+						// skip this query and all future dangerous queries
+						skipAllDangerous = true
+						continue
+					default:
+						return fmt.Errorf("user stopped execution; exiting")
+					}
+				}
+
+				log.Printf("Executing query; %s\n", query)
+				_, err = db.Exec(query)
+				if err != nil {
+					return fmt.Errorf("error executing query %v; %v", query, err)
+				}
+			}
+
+			log.Printf("[INFO] Migration \"%v\" successfull\n", file.Name())
+		}
+	}
+	return nil
+}
